@@ -22,9 +22,9 @@ class Cell{
         }
     }
 
-    setFood(typeID, nutrition) {
+    setFood(typeId, nutrition) {
         this.state = CellStates.food;
-        this.foodType = typeID;
+        this.foodType = typeId;
         this.nutrition = nutrition;
     }
 }

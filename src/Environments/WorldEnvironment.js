@@ -114,6 +114,11 @@ class WorldEnvironment extends Environment{
             this.walls.push(this.grid_map.cellAt(c, r));
     }
 
+    changeFoodCell(c, r, typeId, nutrition, owner) {
+        super.changeFoodCell(c, r, typeId, nutrition, owner);
+        this.renderer.addToRender(this.grid_map.cellAt(c, r));
+    }
+
     clearWalls() {
         for(var wall of this.walls){
             let wcell = this.grid_map.cellAt(wall.col, wall.row);
@@ -147,7 +152,7 @@ class WorldEnvironment extends Environment{
                 var r=Math.floor(Math.random() * this.grid_map.rows);
 
                 if (this.grid_map.cellAt(c, r).state == CellStates.empty){
-                    this.changeCell(c, r, CellStates.food, null);
+                    this.changeFoodCell(c, r, 1, 1.0, null);
                 }
             }
         }

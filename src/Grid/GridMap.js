@@ -39,6 +39,13 @@ class GridMap {
         return this.grid[col][row];
     }
 
+    setCellFood(col, row, typeId, nutrition){
+        if (!this.isValidLoc(col, row)) {
+            return;
+        }
+        this.grid[col][row].setFood(typeId, nutrition);
+    }
+
     setCellType(col, row, state) {
         if (!this.isValidLoc(col, row)) {
             return;

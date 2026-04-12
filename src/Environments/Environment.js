@@ -12,6 +12,11 @@ class Environment{
         this.grid_map.setCellType(c, r, state);
         this.grid_map.setCellOwner(c, r, owner);
     }
+
+    changeFoodCell(c, r, typeId, nutrition, owner=null) {
+        this.grid_map.setCellFood(c, r, typeId, nutrition);
+        this.grid_map.setCellOwner(c, r, owner);
+    }
 }
 
 
