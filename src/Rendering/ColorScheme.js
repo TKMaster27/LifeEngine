@@ -4,6 +4,8 @@ const color_schemes = {
     "neon":{
         "empty":"#0E1318",
         "food":"#2F7AB7",
+        "food-center-0": "#2F7AB7",
+        "food-center-1": "#e21bf8", 
         "wall":"white",
         "mouth":"#DEB14D",
         "producer":"#15DE59",
@@ -85,6 +87,10 @@ class ColorSchemeSingleton {
             $('#'+cell_type+'.cell-legend-type').css('background-color', color_scheme[cell_type]);
             
         }
+        CellStates.food.center_colours = {
+            0: color_scheme["food-center-0"] || "#2F7AB7",
+            1: color_scheme["food-center-1"] || "#e21bf8"
+        };
         this.world_env.renderer.renderFullGrid(this.world_env.grid_map.grid);
         this.editor_env.renderer.renderFullGrid(this.editor_env.grid_map.grid);
     }

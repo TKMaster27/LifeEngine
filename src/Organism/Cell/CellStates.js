@@ -19,6 +19,26 @@ class Empty extends CellState {
 class Food extends CellState {
     constructor() {
         super('food');
+        this.center_colours = {
+            0: "#2F7AB7",
+            1: "#e21bf8"
+        };
+        this.center_default = "#FFFFFF";
+        
+    }
+
+    render(ctx, cell, size) {
+        ctx.fillStyle = this.color;
+        ctx.fillRect(cell.x, cell.y, size, size);
+        if(size <= 2)
+            return;
+
+        const markerColor = this.center_colours[cell.foodType] || this.center_default;
+        const markerSize = Math.max(1, Math.floor(size * 0.5));
+        const offset = Math.floor((size - markerSize) / 2);
+
+        ctx.fillStyle = markerColor;
+        ctx.fillRect(cell.x + offset, cell.y + offset, markerSize, markerSize);
     }
 }
 class Wall extends CellState {
