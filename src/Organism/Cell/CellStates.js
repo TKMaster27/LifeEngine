@@ -50,6 +50,24 @@ class Mouth extends CellState {
     constructor() {
         super('mouth');
     }
+
+    render(ctx, cell, size) {
+        ctx.fillStyle = this.color;
+        ctx.fillRect(cell.x, cell.y, size, size);
+        if (size <= 2) return;
+
+        const diet = (cell.cell_owner && typeof cell.cell_owner.diet === "number")
+            ? cell.cell_owner.diet
+            : 0;
+
+        const foodColors = CellStates.food.center_colours || {};
+        const markerColor = foodColors[diet] || "#FFFFFF";
+        const markerSize = Math.max(1, Math.floor(size * 0.5));
+        const offset = Math.floor((size - markerSize) / 2);
+
+        ctx.fillStyle = markerColor;
+        ctx.fillRect(cell.x + offset, cell.y + offset, markerSize, markerSize);
+    }
 }
 class Producer extends CellState {
     constructor() {
