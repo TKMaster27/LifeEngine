@@ -164,6 +164,15 @@ class Brain {
         }
     }
 
+    canEatFoodType(foodType) {
+    for (let cell of this.owner.anatomy.cells) {
+        if (cell.state === CellStates.mouth && cell.diet === foodType) {
+            return true;
+        }
+    }
+    return false;
+}
+
     newDecisionMap(default_decision=null) {
         const decisions = {};
         for (let cell of CellStates.all) {
@@ -233,7 +242,14 @@ class Brain {
                 if (this.state >= this.num_states) {
                     console.error('state out of bounds', this.state, this.num_states);
                 }
-                decision = this.decisions[eye_index][this.state][obs.cell.state.name];
+                let observedName = obs.cell.state.name;
+
+                // Treat non-edible food as wall for decision making.
+                if (obs.cell.state === CellStates.food && !this.canEatFoodType(obs.cell.foodType)) {
+                    observedName = CellStates.wall.name;
+                }
+
+                decision = this.decisions[eye_index][this.state][observedName];
                 move_direction = obs.direction;
                 closest = obs.distance;
             }

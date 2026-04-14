@@ -3,8 +3,10 @@ const BodyCell = require("./BodyCell");
 const Hyperparams = require("../../../Hyperparameters");
 
 class MouthCell extends BodyCell{
-    constructor(org, loc_col, loc_row){
+    constructor(org, loc_col, loc_row, food=0){
+        
         super(CellStates.mouth, org, loc_col, loc_row);
+        this.diet = food;
     }
 
     performFunction() {
@@ -20,9 +22,25 @@ class MouthCell extends BodyCell{
     eatNeighbor(n_cell, env) {
         if (n_cell == null)
             return;
-        if (n_cell.state == CellStates.food){
+        if (n_cell.state == CellStates.food && n_cell.foodType == this.diet){
             env.changeCell(n_cell.col, n_cell.row, CellStates.empty, null);
             this.org.food_collected++;
+        }
+    }
+
+    initDefault(){
+        this.diet = 0;
+    }
+
+    initRandom(){
+        this.diet = Math.random() < 0.5 ? 0 : 1;
+    }
+
+    initInherit(parent) {
+        super.initInherit(parent);
+        this.diet = parent.diet;
+        if (Math.random() < 0.01) {
+            this.diet = this.diet === 0 ? 1 : 0;
         }
     }
 }
