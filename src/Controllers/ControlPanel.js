@@ -361,6 +361,9 @@ class ControlPanel {
         $('#food-drop-rate').change(function() {
             Hyperparams.foodDropProb = $('#food-drop-rate').val();
         });
+         $('#alternative-food-drop-rate').change(function() {
+            Hyperparams.altFoodTypeChance = $('#alternative-food-drop-rate').val()/100;
+        });
         $('#extra-mover-cost').change(function() {
             Hyperparams.extraMoverFoodCost = parseInt($('#extra-mover-cost').val());
         });

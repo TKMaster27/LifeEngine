@@ -39,7 +39,7 @@ class MouthCell extends BodyCell{
     initInherit(parent) {
         super.initInherit(parent);
         this.diet = parent.diet;
-        if (Math.random() < 0.01) {
+        if (Math.random() < 0.001) {
             this.diet = this.diet === 0 ? 1 : 0;
         }
     }

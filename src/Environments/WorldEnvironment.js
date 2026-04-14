@@ -146,13 +146,18 @@ class WorldEnvironment extends Environment{
     generateFood() {
         var num_food = Math.max(Math.floor(this.grid_map.cols*this.grid_map.rows*Hyperparams.foodDropProb/50000), 1)
         var prob = Hyperparams.foodDropProb;
+        var altFoodTypeChance = Hyperparams.altFoodTypeChance;
         for (var i=0; i<num_food; i++) {
             if (Math.random() <= prob){
                 var c=Math.floor(Math.random() * this.grid_map.cols);
                 var r=Math.floor(Math.random() * this.grid_map.rows);
 
                 if (this.grid_map.cellAt(c, r).state == CellStates.empty){
-                    this.changeFoodCell(c, r, 1, 1.0, null);
+                    var isAlt = Math.random() < altFoodTypeChance;
+                    var typeId = isAlt ? 1 : 0;
+                    var nutrition = isAlt ? 1.5 : 1.0;
+
+                    this.changeFoodCell(c, r, typeId, nutrition, null);
                 }
             }
         }

@@ -29,6 +29,7 @@ const Hyperparams = {
         this.evolveIndependentEyeDecisions = true;
 
         this.foodDropProb = 0;
+        this.altFoodTypeChance = 0.0;
 
         this.extraMoverFoodCost = 0;
 
