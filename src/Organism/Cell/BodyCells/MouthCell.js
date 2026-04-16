@@ -23,8 +23,13 @@ class MouthCell extends BodyCell{
         if (n_cell == null)
             return;
         if (n_cell.state == CellStates.food && n_cell.foodType == this.diet){
+            
+            const baseNutrition = (typeof n_cell.nutrition === "number") ? n_cell.nutrition : 1.0;
+            const efficiency = this.org.foodAbsorptionMultiplier();
+
+
+            this.org.food_collected += baseNutrition * efficiency;
             env.changeCell(n_cell.col, n_cell.row, CellStates.empty, null);
-            this.org.food_collected++;
         }
     }
 

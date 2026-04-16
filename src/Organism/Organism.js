@@ -280,6 +280,18 @@ class Organism {
         return true;
     }
 
+    foodAbsorptionMultiplier() {
+    const diets = new Set();
+    for (const cell of this.anatomy.cells) {
+        if (cell.state === CellStates.mouth && typeof cell.diet === "number") {
+            diets.add(cell.diet);
+        }
+    }
+
+    // consumming multiple food types means complicated digestive system and less resources consumed
+    return diets.size > 1 ? 1/diets.size : 1.0;
+}
+
     harm() {
         this.damage++;
         if (this.damage >= this.maxHealth() || Hyperparams.instaKill) {
