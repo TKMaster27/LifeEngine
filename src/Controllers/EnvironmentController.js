@@ -188,7 +188,7 @@ class EnvironmentController extends CanvasController{
         return false;
     }
 
-    dropCellType(col, row, state, killBlocking=false, ignoreState=null) {
+    dropCellType(col, row, state, killBlocking=false, ignoreState=null, foodType=0, nutrition=1.0) {
         for (var loc of Neighbors.inRange(WorldConfig.brush_size)){
             var c=col + loc[0];
             var r=row + loc[1];
@@ -203,7 +203,11 @@ class EnvironmentController extends CanvasController{
             }
             if (ignoreState != null && cell.state == ignoreState)
                 continue;
-            this.env.changeCell(c, r, state, null);
+            if (state === CellStates.food) {
+                this.env.changeFoodCell(c, r, foodType, nutrition, null);
+            } else {
+                this.env.changeCell(c, r, state, null);
+            }
         }
     }
 
