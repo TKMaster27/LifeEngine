@@ -20,15 +20,22 @@ class Species {
     }
 
     calcAnatomyDetails() {
-        if (!this.anatomy) return;
-        var cell_counts = {};
-        for (let c of CellStates.living) {
-            cell_counts[c.name] = 0;
-        }
+    if (!this.anatomy) return;
+    var cell_counts = {};
+    for (let c of CellStates.living) {
+        cell_counts[c.name] = 0;
+    }
+
+    const mouth_diets = new Set();
         for (let cell of this.anatomy.cells) {
-            cell_counts[cell.state.name]+=1;
+            cell_counts[cell.state.name] += 1;
+            if (cell.state.name === CellStates.mouth.name && typeof cell.diet === "number") {
+                mouth_diets.add(cell.diet);
+            }
         }
-        this.cell_counts=cell_counts;
+
+        this.cell_counts = cell_counts;
+        this.mouth_diets = Array.from(mouth_diets).sort();
     }
 
     addPop() {

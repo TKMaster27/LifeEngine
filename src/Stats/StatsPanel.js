@@ -2,10 +2,11 @@ const PopulationChart = require("./Charts/PopulationChart");
 const SpeciesChart = require("./Charts/SpeciesChart");
 const MutationChart = require("./Charts/MutationChart");
 const CellsChart = require("./Charts/CellsChart");
+const DietSpecializationChart = require("./Charts/DietSpecializationChart");
 const FossilRecord = require("./FossilRecord");
 
 
-const ChartSelections = [PopulationChart, SpeciesChart, CellsChart, MutationChart];
+const ChartSelections = [PopulationChart, SpeciesChart, CellsChart, MutationChart, DietSpecializationChart];
 
 class StatsPanel {
     constructor(env) {

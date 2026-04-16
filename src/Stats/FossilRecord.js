@@ -79,6 +79,7 @@ const FossilRecord = {
         this.av_mut_rates = [];
         this.av_cells = [];
         this.av_cell_counts = [];
+        this.species_diet_counts = [];
         this.updateData();
     },
 
@@ -88,6 +89,7 @@ const FossilRecord = {
         this.pop_counts.push(this.env.organisms.length);
         this.species_counts.push(this.numExtantSpecies());
         this.av_mut_rates.push(this.env.averageMutability());
+        this.species_diet_counts.push(this.calcDietSpecializationCounts());
         this.calcCellCountAverages();
         while (this.tick_record.length > this.record_size_limit) {
             this.tick_record.shift();
@@ -96,7 +98,33 @@ const FossilRecord = {
             this.av_mut_rates.shift();
             this.av_cells.shift();
             this.av_cell_counts.shift();
+            this.species_diet_counts.shift();
         }
+    },
+
+    calcDietSpecializationCounts() {
+        const counts = {
+            type0_only: 0,
+            type1_only: 0,
+            generalist: 0,
+            none: 0
+        };
+
+        for (let s of Object.values(this.extant_species)) {
+            const diets = Array.isArray(s.mouth_diets) ? s.mouth_diets : [];
+            if (diets.length === 0) {
+                counts.none++;
+            } else if (diets.length > 1) {
+                counts.generalist++;
+            } else if (diets[0] === 0) {
+                counts.type0_only++;
+            } else if (diets[0] === 1) {
+                counts.type1_only++;
+            } else {
+                counts.none++;
+            }
+        }
+        return counts;
     },
 
     calcCellCountAverages() {
@@ -159,6 +187,7 @@ const FossilRecord = {
             av_mut_rates:this.av_mut_rates,
             av_cells:this.av_cells,
             av_cell_counts:this.av_cell_counts,
+            species_diet_counts: this.species_diet_counts,
         };
         let species = {};
         for (let s of Object.values(this.extant_species)) {
