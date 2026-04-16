@@ -281,16 +281,26 @@ class Organism {
     }
 
     foodAbsorptionMultiplier() {
-    const diets = new Set();
-    for (const cell of this.anatomy.cells) {
-        if (cell.state === CellStates.mouth && typeof cell.diet === "number") {
-            diets.add(cell.diet);
+        const diets = new Set();
+        for (const cell of this.anatomy.cells) {
+            if (cell.state === CellStates.mouth && typeof cell.diet === "number") {
+                diets.add(cell.diet);
+            }
         }
+
+        // consumming multiple food types means complicated digestive system and less resources consumed
+        return diets.size > 1 ? 1/diets.size : 1.0;
     }
 
-    // consumming multiple food types means complicated digestive system and less resources consumed
-    return diets.size > 1 ? 1/diets.size : 1.0;
-}
+    getEdibleFoodTypes() {
+        const diets = new Set();
+        for (const cell of this.anatomy.cells) {
+            if (cell.state === CellStates.mouth && typeof cell.diet === "number") {
+                diets.add(cell.diet);
+            }
+        }
+        return Array.from(diets);
+    }
 
     harm() {
         this.damage++;
@@ -304,6 +314,7 @@ class Organism {
             var real_c = this.c + cell.rotatedCol(this.rotation);
             var real_r = this.r + cell.rotatedRow(this.rotation);
             this.env.changeCell(real_c, real_r, CellStates.empty, null);
+            // this.env.changeFoodCell(real_c, real_r, 0, 1.0);
         }
         this.species.decreasePop();
         this.living = false;

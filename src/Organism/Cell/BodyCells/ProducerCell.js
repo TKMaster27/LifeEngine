@@ -21,7 +21,13 @@ class ProducerCell extends BodyCell{
             var loc_r=loc[1];
             var cell = env.grid_map.cellAt(real_c+loc_c, real_r+loc_r);
             if (cell != null && cell.state == CellStates.empty){
-                env.changeFoodCell(real_c+loc_c, real_r+loc_r, 0, 1.0, null);
+                const edible = this.org.getEdibleFoodTypes();
+                const typeId = edible.length > 0
+                    ? edible[Math.floor(Math.random() * edible.length)]
+                    : 0;
+
+                const nutrition = (typeId === 1) ? 1.0 : 1.0;
+                env.changeFoodCell(real_c + loc_c, real_r + loc_r, typeId, nutrition, null);
                 return;
             }
         }
