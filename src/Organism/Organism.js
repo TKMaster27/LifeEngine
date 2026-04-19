@@ -313,8 +313,8 @@ class Organism {
         for (var cell of this.anatomy.cells) {
             var real_c = this.c + cell.rotatedCol(this.rotation);
             var real_r = this.r + cell.rotatedRow(this.rotation);
-            this.env.changeCell(real_c, real_r, CellStates.empty, null);
-            // this.env.changeFoodCell(real_c, real_r, 0, 1.0);
+            // this.env.changeCell(real_c, real_r, CellStates.empty, null);
+            this.env.changeFoodCell(real_c, real_r, 0, 1.0);
         }
         this.species.decreasePop();
         this.living = false;

@@ -25,7 +25,7 @@ class Cell{
     setFood(typeId, nutrition) {
         this.state = CellStates.food;
         this.foodType = typeId;
-        this.nutrition = (typeId === 1) ? 2.0 : nutrition;
+        this.nutrition = nutrition;
     }
 }
 

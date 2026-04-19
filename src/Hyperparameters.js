@@ -30,10 +30,34 @@ const Hyperparams = {
 
         this.foodDropProb = 0;
         this.altFoodTypeChance = 0.0;
+        this.foodTypes = [
+            { id: 0, nutrition: 1.0, worldSpawnWeight: 0.0 },
+            { id: 1, nutrition: 1.0, worldSpawnWeight: 1.0 }
+        ];
 
         this.extraMoverFoodCost = 0;
 
         this.maxOrganisms = -1;
+    },
+
+    getFoodTypeById(id) {
+        return this.foodTypes.find(t => t.id === id) || this.foodTypes[0];
+    },
+
+    getFoodNutrition(id) {
+        const t = this.getFoodTypeById(id);
+        return t ? t.nutrition : 1.0;
+    },
+
+    getRandomFoodTypeId() {
+        const total = this.foodTypes.reduce((s, t) => s + (t.worldSpawnWeight || 0), 0);
+        if (total <= 0) return this.foodTypes[0].id;
+        let r = Math.random() * total;
+        for (const t of this.foodTypes) {
+            r -= (t.worldSpawnWeight || 0);
+            if (r <= 0) return t.id;
+        }
+        return this.foodTypes[this.foodTypes.length - 1].id;
     },
 
     loadJsonObj(obj) {
