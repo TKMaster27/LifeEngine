@@ -349,6 +349,9 @@ class ControlPanel {
         $('#insta-kill').change(function() {
             Hyperparams.instaKill = this.checked;
         });
+        $('#dead-turn-to-food').change(function() {
+            Hyperparams.deadTurnToFood = this.checked;
+        });
         $('#look-range').change(function() {
             Hyperparams.lookRange = $('#look-range').val();
         });
@@ -457,6 +460,7 @@ class ControlPanel {
         $('#lifespan-multiplier').val(Hyperparams.lifespanMultiplier);
         $('#rot-enabled').prop('checked', Hyperparams.rotationEnabled);
         $('#insta-kill').prop('checked', Hyperparams.instaKill);
+        $('#dead-turn-to-food').prop('checked', Hyperparams.deadTurnToFood);
         $('#evolved-mutation').prop('checked', !Hyperparams.useGlobalMutability);
         $('#add-prob').val(Hyperparams.addProb);
         $('#change-prob').val(Hyperparams.changeProb);

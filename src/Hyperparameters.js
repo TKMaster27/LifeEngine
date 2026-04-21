@@ -37,6 +37,8 @@ const Hyperparams = {
 
         this.extraMoverFoodCost = 0;
 
+        this.deadTurnToFood = true;
+
         this.maxOrganisms = -1;
     },
 
