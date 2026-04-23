@@ -154,7 +154,7 @@ class WorldEnvironment extends Environment{
 
                 if (this.grid_map.cellAt(c, r).state == CellStates.empty){
                     var isAlt = Math.random() < altFoodTypeChance;
-                    const typeId = Hyperparams.getRandomFoodTypeId();
+                    const typeId = isAlt ? 1 : 0;
                     const nutrition = Hyperparams.getFoodNutrition(typeId);
 
                     this.changeFoodCell(c, r, typeId, nutrition, null);

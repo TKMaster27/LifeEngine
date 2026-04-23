@@ -32,7 +32,7 @@ const Hyperparams = {
         this.altFoodTypeChance = 0.0;
         this.foodTypes = [
             { id: 0, nutrition: 1.0, worldSpawnWeight: 0.5 },
-            { id: 1, nutrition: 1.0, worldSpawnWeight: 0.2 }
+            { id: 1, nutrition: 2.0, worldSpawnWeight: 0.2 }
         ];
 
         this.extraMoverFoodCost = 0;

@@ -471,6 +471,7 @@ class ControlPanel {
         $('#food-blocks').prop('checked', Hyperparams.foodBlocksReproduction);
         $('#dont-kill-same-species').prop('checked', Hyperparams.dontKillSameSpecies);
         $('#food-drop-rate').val(Hyperparams.foodDropProb);
+        $('#alternative-food-drop-rate').val(Hyperparams.altFoodTypeChance * 100);
         $('#extra-mover-cost').val(Hyperparams.extraMoverFoodCost);
         $('#org-limit').val(Hyperparams.maxOrganisms);
         $('#look-range').val(Hyperparams.lookRange);
