@@ -3,7 +3,7 @@ const Neighbors = require("./Grid/Neighbors");
 const Hyperparams = {
     setDefaults: function() {
         this.lifespanMultiplier = 100;
-        this.foodProdProb = 5;
+        this.foodProdProb = 3;
         this.killableNeighbors = Neighbors.adjacent;
         this.edibleNeighbors = Neighbors.adjacent;
         this.growableNeighbors = Neighbors.adjacent;
@@ -32,7 +32,7 @@ const Hyperparams = {
         this.altFoodTypeChance = 0.0;
         this.foodTypes = [
             { id: 0, nutrition: 1.0, worldSpawnWeight: 0.5 },
-            { id: 1, nutrition: 2.0, worldSpawnWeight: 0.2 }
+            { id: 1, nutrition: 1.5, worldSpawnWeight: 0.2 }
         ];
 
         this.extraMoverFoodCost = 0;

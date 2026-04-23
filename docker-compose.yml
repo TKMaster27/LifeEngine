@@ -1,0 +1,9 @@
+version: '3.8'
+
+services:
+  life-engine:
+    image: tkmaster27/life-engine-v2:latest
+    container_name: life-engine-v2
+    ports:
+      - "8080:80"
+    restart: always
