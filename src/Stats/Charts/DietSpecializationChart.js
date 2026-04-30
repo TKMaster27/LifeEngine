@@ -31,6 +31,22 @@ class DietSpecializationChart extends ChartController {
         this.data.push({
             type: "line",
             markerType: "none",
+            color: "#ff0080",
+            showInLegend: true,
+            legendText: "Type 1 specialists",
+            dataPoints: []
+        });
+        this.data.push({
+            type: "line",
+            markerType: "none",
+            color: "#fac800",
+            showInLegend: true,
+            legendText: "Type 1 specialists",
+            dataPoints: []
+        });
+        this.data.push({
+            type: "line",
+            markerType: "none",
             color: "#15DE59",
             showInLegend: true,
             legendText: "Generalists",
@@ -52,8 +68,10 @@ class DietSpecializationChart extends ChartController {
         const d = FossilRecord.species_diet_counts[i] || { type0_only: 0, type1_only: 0, generalist: 0, none: 0 };
         this.data[0].dataPoints.push({ x: t, y: d.type0_only });
         this.data[1].dataPoints.push({ x: t, y: d.type1_only });
-        this.data[2].dataPoints.push({ x: t, y: d.generalist });
-        this.data[3].dataPoints.push({ x: t, y: d.none });
+        this.data[2].dataPoints.push({ x: t, y: d.type2_only });
+        this.data[3].dataPoints.push({ x: t, y: d.type3_only });
+        this.data[4].dataPoints.push({ x: t, y: d.generalist });
+        this.data[5].dataPoints.push({ x: t, y: d.none });
     }
 }
 

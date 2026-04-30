@@ -31,8 +31,10 @@ const Hyperparams = {
         this.foodDropProb = 0;
         this.altFoodTypeChance = 0.0;
         this.foodTypes = [
-            { id: 0, nutrition: 1.0, worldSpawnWeight: 0.5 },
-            { id: 1, nutrition: 1.5, worldSpawnWeight: 0.2 }
+            { id: 0, nutrition: 1.5},
+            { id: 1, nutrition: 1.0},
+            { id: 2, nutrition: 1.0},
+            { id: 3, nutrition: 1.0}
         ];
 
         this.extraMoverFoodCost = 0;
@@ -52,14 +54,8 @@ const Hyperparams = {
     },
 
     getRandomFoodTypeId() {
-        const total = this.foodTypes.reduce((s, t) => s + (t.worldSpawnWeight || 0), 0);
-        if (total <= 0) return this.foodTypes[0].id;
-        let r = Math.random() * total;
-        for (const t of this.foodTypes) {
-            r -= (t.worldSpawnWeight || 0);
-            if (r <= 0) return t.id;
-        }
-        return this.foodTypes[this.foodTypes.length - 1].id;
+        const randomIndex = Math.floor(Math.random() * this.foodTypes.length);
+        return this.foodTypes[randomIndex].id;
     },
 
     loadJsonObj(obj) {

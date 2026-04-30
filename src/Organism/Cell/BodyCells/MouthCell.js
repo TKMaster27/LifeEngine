@@ -38,14 +38,19 @@ class MouthCell extends BodyCell{
     }
 
     initRandom(){
-        this.diet = Math.random() < 0.5 ? 0 : 1;
+        this.diet = Hyperparams.getRandomFoodTypeId();
     }
 
     initInherit(parent) {
         super.initInherit(parent);
         this.diet = parent.diet;
         if (Math.random() < 0.001) {
-            this.diet = this.diet === 0 ? 1 : 0;
+            this.diet = Hyperparams.getRandomFoodTypeId();
+        }
+
+        // ensures producers cannot eat food types zero (meat)
+        while (this.org.anatomy.is_producer && this.diet === 0) {
+             this.diet = Hyperparams.getRandomFoodTypeId();
         }
     }
 }

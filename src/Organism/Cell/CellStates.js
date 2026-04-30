@@ -21,7 +21,10 @@ class Food extends CellState {
         super('food');
         this.center_colours = {
             0: "#2F7AB7",
-            1: "#e21bf8"
+            1: "#e21bf8",
+            2: "#ff0080",
+            3: "#fac800"
+            
         };
         this.center_default = "#FFFFFF";
         

@@ -22,10 +22,10 @@ class ProducerCell extends BodyCell{
             var cell = env.grid_map.cellAt(real_c+loc_c, real_r+loc_r);
             if (cell != null && cell.state == CellStates.empty){
                 const edible = this.org.getEdibleFoodTypes();
-                const allowed = edible.filter(id => Hyperparams.getFoodTypeById(id));
+                const allowed = edible.filter(id => id !== 0 && Hyperparams.getFoodTypeById(id));
                 const typeId = allowed.length > 0
                     ? allowed[Math.floor(Math.random() * allowed.length)]
-                    : Hyperparams.foodTypes[0].id;
+                    : Hyperparams.foodTypes[1].id;
 
                 const nutrition = Hyperparams.getFoodNutrition(typeId);
                 env.changeFoodCell(real_c + loc_c, real_r + loc_r, typeId, nutrition, null);

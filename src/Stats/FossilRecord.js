@@ -102,10 +102,12 @@ const FossilRecord = {
         }
     },
 
-    calcDietSpecializationCounts() {
+        calcDietSpecializationCounts() {
         const counts = {
             type0_only: 0,
             type1_only: 0,
+            type2_only: 0,
+            type3_only: 0,
             generalist: 0,
             none: 0
         };
@@ -120,6 +122,10 @@ const FossilRecord = {
                 counts.type0_only++;
             } else if (diets[0] === 1) {
                 counts.type1_only++;
+            } else if (diets[0] === 2) {
+                counts.type2_only++;
+            } else if (diets[0] === 3) {
+                counts.type3_only++;
             } else {
                 counts.none++;
             }

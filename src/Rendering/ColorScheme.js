@@ -5,7 +5,9 @@ const color_schemes = {
         "empty":"#0E1318",
         "food":"#2F7AB7",
         "food-center-0": "#2F7AB7",
-        "food-center-1": "#e21bf8", 
+        "food-center-1": "#e21bf8",
+        "food-center-2": "#ff0080",
+        "food-center-3": "#fac800", 
         "wall":"white",
         "mouth":"#DEB14D",
         "producer":"#15DE59",
@@ -89,7 +91,9 @@ class ColorSchemeSingleton {
         }
         CellStates.food.center_colours = {
             0: color_scheme["food-center-0"] || "#2F7AB7",
-            1: color_scheme["food-center-1"] || "#e21bf8"
+            1: color_scheme["food-center-1"] || "#e21bf8",
+            2: color_scheme["food-center-2"] || "#ff0080",
+            3: color_scheme["food-center-3"] || "#fac800",
         };
         this.world_env.renderer.renderFullGrid(this.world_env.grid_map.grid);
         this.editor_env.renderer.renderFullGrid(this.editor_env.grid_map.grid);
