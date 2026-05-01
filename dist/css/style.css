@@ -134,11 +134,46 @@ input:hover,input:active {
     padding-bottom: 0px;
 }
 
+#mode-controls {
+    float: right;
+    display: flex;
+    flex-direction: row;
+    align-items: flex-start;
+    gap: 3px;
+}
+
 .vertical-buttons {
-    float:right;
     display: grid;
-    grid-template-rows: 2;
-    grid-template-columns: 1;
+    grid-template-rows: auto;
+    grid-template-columns: 1fr;
+}
+
+#food-type-selector {
+    display: none;
+    flex-direction: column;
+    gap: 2px;
+    padding: 3px;
+    background-color: var(--border);
+    border-radius: 4px;
+}
+
+.food-type-btn {
+    width: 24px;
+    height: 24px;
+    border-radius: 3px;
+    border: 2px solid transparent;
+    cursor: pointer;
+    padding: 0;
+}
+
+.food-type-btn:nth-child(1) { background-color: #2F7AB7; }
+.food-type-btn:nth-child(2) { background-color: #e21bf8; }
+.food-type-btn:nth-child(3) { background-color: #ff0080; }
+.food-type-btn:nth-child(4) { background-color: #fac800; }
+
+.food-type-btn.selected {
+    border-color: white;
+    box-shadow: 0 0 4px rgba(255, 255, 255, 0.8);
 }
 .editor-buttons {
     display: grid;

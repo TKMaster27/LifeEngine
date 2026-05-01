@@ -16,12 +16,20 @@
 		</div>
 		<div class='control-panel'>
 			<div id='speed-controller' class='control-set'>
-				<div class='vertical-buttons'>
-					<button class="reset-view" title="Reset View. Hotkey: A"><i class="fa fa-video-camera"></i></button>
-					<button class="edit-mode-btn drag-view" id="drag-view" title="Drag View. Hotkey: S"><i class="fa fa-arrows"></i></button>
-					<button class="edit-mode-btn wall-drop" id="wall-drop" title="Drop/Remove Wall. Hotkey: D"><i class="fa fa-th"></i></button>
-					<button class="edit-mode-btn food-drop selected" id="food-drop" title="Drop/Remove Food. Hotkey: F"><i class="fa fa-cutlery"></i></button>
-					<button class="edit-mode-btn click-kill" id="click-kill" title="Click to kill. Hotkey: G"><i class="fa fa-skull"></i></button>
+				<div id="mode-controls">
+					<div id="food-type-selector">
+						<button class="food-type-btn selected" data-food-type="0" title="Type 0: Base food (blue)"></button>
+						<button class="food-type-btn" data-food-type="1" title="Type 1 (magenta)"></button>
+						<button class="food-type-btn" data-food-type="2" title="Type 2 (pink)"></button>
+						<button class="food-type-btn" data-food-type="3" title="Type 3 (gold)"></button>
+					</div>
+					<div class='vertical-buttons'>
+						<button class="reset-view" title="Reset View. Hotkey: A"><i class="fa fa-video-camera"></i></button>
+						<button class="edit-mode-btn drag-view" id="drag-view" title="Drag View. Hotkey: S"><i class="fa fa-arrows"></i></button>
+						<button class="edit-mode-btn wall-drop" id="wall-drop" title="Drop/Remove Wall. Hotkey: D"><i class="fa fa-th"></i></button>
+						<button class="edit-mode-btn food-drop selected" id="food-drop" title="Drop/Remove Food. Hotkey: F"><i class="fa fa-cutlery"></i></button>
+						<button class="edit-mode-btn click-kill" id="click-kill" title="Click to kill. Hotkey: G"><i class="fa fa-skull"></i></button>
+					</div>
 				</div>
 				<img src="./img/title.png" alt="Life Engine">
 				<h3>Simulation Speed</h3>

@@ -6,6 +6,7 @@ const Neighbors = require("../Grid/Neighbors");
 const FossilRecord = require("../Stats/FossilRecord");
 const WorldConfig = require("../WorldConfig");
 const Perlin = require("../Utils/Perlin");
+const Hyperparams = require("../Hyperparameters");
 
 class EnvironmentController extends CanvasController{
     constructor(env, canvas) {
@@ -113,7 +114,9 @@ class EnvironmentController extends CanvasController{
             switch(mode) {
                 case Modes.FoodDrop:
                     if (left_click){
-                        this.dropCellType(cell.col, cell.row, CellStates.food, false, CellStates.wall);
+                        const foodType = this.control_panel ? this.control_panel.selectedFoodType : 0;
+                        const nutrition = Hyperparams.getFoodNutrition(foodType);
+                        this.dropCellType(cell.col, cell.row, CellStates.food, false, CellStates.wall, foodType, nutrition);
                     }
                     else if (right_click){
                         this.dropCellType(cell.col, cell.row, CellStates.empty, false, CellStates.wall);

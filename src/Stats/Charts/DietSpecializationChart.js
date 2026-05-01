@@ -33,7 +33,7 @@ class DietSpecializationChart extends ChartController {
             markerType: "none",
             color: "#ff0080",
             showInLegend: true,
-            legendText: "Type 1 specialists",
+            legendText: "Type 2 specialists",
             dataPoints: []
         });
         this.data.push({
@@ -41,7 +41,7 @@ class DietSpecializationChart extends ChartController {
             markerType: "none",
             color: "#fac800",
             showInLegend: true,
-            legendText: "Type 1 specialists",
+            legendText: "Type 3 specialists",
             dataPoints: []
         });
         this.data.push({

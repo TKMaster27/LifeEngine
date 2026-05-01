@@ -49,9 +49,9 @@ class MouthCell extends BodyCell{
         }
 
         // ensures producers cannot eat food types zero (meat)
-        while (this.org.anatomy.is_producer && this.diet === 0) {
-             this.diet = Hyperparams.getRandomFoodTypeId();
-        }
+        // while (this.org.anatomy.is_producer && this.diet === 0) {
+        //      this.diet = Hyperparams.getRandomFoodTypeId();
+        // }
     }
 }
 
