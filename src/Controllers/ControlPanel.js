@@ -500,38 +500,45 @@ class ControlPanel {
             switch(this.id) {
                 case "food-drop":
                     self.setMode(Modes.FoodDrop);
-                    $('#food-type-selector').css('display', 'flex');
                     break;
                 case "wall-drop":
                     self.setMode(Modes.WallDrop);
-                    $('#food-type-selector').css('display', 'none');
                     break;
                 case "click-kill":
                     self.setMode(Modes.ClickKill);
-                    $('#food-type-selector').css('display', 'none');
                     break;
                 case "select":
                     self.setMode(Modes.Select);
-                    $('#food-type-selector').css('display', 'none');
                     break;
-
                 case "drop-org":
                     self.setMode(Modes.Clone);
-                    $('#food-type-selector').css('display', 'none');
                     break;
                 case "drag-view":
                     self.setMode(Modes.Drag);
-                    $('#food-type-selector').css('display', 'none');
                     break;
             }
             $('.edit-mode-btn').removeClass('selected');
             $('.'+this.id).addClass('selected');
         });
 
+        $('#food-drop').on('contextmenu', function(e) {
+            e.preventDefault();
+            var selector = $('#food-type-selector');
+            var isVisible = selector.css('display') !== 'none';
+            selector.css('display', isVisible ? 'none' : 'flex');
+        });
+
+        $(document).on('click', function(e) {
+            if (!$(e.target).closest('#food-type-selector, #food-drop').length) {
+                $('#food-type-selector').css('display', 'none');
+            }
+        });
+
         $('.food-type-btn').click(function() {
             self.selectedFoodType = parseInt($(this).data('food-type'));
             $('.food-type-btn').removeClass('selected');
             $(this).addClass('selected');
+            $('#food-type-selector').css('display', 'none');
         });
         $('.reset-view').click( function(){
             this.env_controller.resetView();
