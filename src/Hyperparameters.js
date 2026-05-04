@@ -4,6 +4,7 @@ const Hyperparams = {
     setDefaults: function() {
         this.lifespanMultiplier = 100;
         this.foodProdProb = 3;
+        this.emitterProdProb = 10;
         this.killableNeighbors = Neighbors.adjacent;
         this.edibleNeighbors = Neighbors.adjacent;
         this.growableNeighbors = Neighbors.adjacent;
@@ -39,7 +40,7 @@ const Hyperparams = {
 
         this.extraMoverFoodCost = 0;
 
-        this.deadTurnToFood = true;
+        this.deadTurnToFood = false;
 
         this.maxOrganisms = -1;
     },

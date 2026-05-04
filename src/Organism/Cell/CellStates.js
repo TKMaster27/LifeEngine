@@ -77,6 +77,12 @@ class Producer extends CellState {
         super('producer');
     }
 }
+class Emitter extends CellState {
+    constructor() {
+        super('emitter');
+        this.color = 'white';
+    }
+}
 class Mover extends CellState {
     constructor() {
         super('mover');
@@ -121,12 +127,13 @@ const CellStates = {
     wall: new Wall(),
     mouth: new Mouth(),
     producer: new Producer(),
+    emitter: new Emitter(),
     mover: new Mover(),
     killer: new Killer(),
     armor: new Armor(),
     eye: new Eye(),
     defineLists() {
-        this.all = [this.empty, this.food, this.wall, this.mouth, this.producer, this.mover, this.killer, this.armor, this.eye]
+        this.all = [this.empty, this.food, this.wall, this.mouth, this.producer, this.emitter, this.mover, this.killer, this.armor, this.eye]
         this.living = [this.mouth, this.producer, this.mover, this.killer, this.armor, this.eye];
     },
     getRandomName: function() {

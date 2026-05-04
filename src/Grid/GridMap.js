@@ -99,6 +99,8 @@ class GridMap {
                     let c = {c: cell.col, r: cell.row, t: cell.foodType, n: cell.nutrition}; // no need to store state
                     if (cell.state===CellStates.food)
                         grid.food.push(c)
+                    else if (cell.state===CellStates.emitter)
+                        grid.emitters.push(c);
                     else
                         grid.walls.push(c)
                 }
@@ -115,6 +117,11 @@ class GridMap {
         }
         for (let w of grid.walls)
             this.setCellType(w.c, w.r, CellStates.wall);
+
+        if (grid.emitters) {
+            for (let e of grid.emitters)
+                this.setCellType(e.c, e.r, CellStates.emitter);
+        }
     }
 }
 

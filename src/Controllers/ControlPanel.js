@@ -501,6 +501,9 @@ class ControlPanel {
                 case "food-drop":
                     self.setMode(Modes.FoodDrop);
                     break;
+                case "emitter-drop":                  
+                    self.setMode(Modes.EmitterDrop); 
+                    break; 
                 case "wall-drop":
                     self.setMode(Modes.WallDrop);
                     break;
@@ -521,7 +524,7 @@ class ControlPanel {
             $('.'+this.id).addClass('selected');
         });
 
-        $('#food-drop').on('contextmenu', function(e) {
+        $('#food-drop, #emitter-drop').on('contextmenu', function(e) {
             e.preventDefault();
             var selector = $('#food-type-selector');
             var isVisible = selector.css('display') !== 'none';
@@ -529,7 +532,7 @@ class ControlPanel {
         });
 
         $(document).on('click', function(e) {
-            if (!$(e.target).closest('#food-type-selector, #food-drop').length) {
+            if (!$(e.target).closest('#food-type-selector, #food-drop, #emitter-drop').length) {
                 $('#food-type-selector').css('display', 'none');
             }
         });

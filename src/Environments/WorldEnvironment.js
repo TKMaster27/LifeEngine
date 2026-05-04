@@ -21,6 +21,7 @@ class WorldEnvironment extends Environment{
         this.grid_map = new GridMap(this.num_cols, this.num_rows, cell_size);
         this.organisms = [];
         this.walls = [];
+        this.emitters = [];
         this.total_mutability = 0;
         this.largest_cell_count = 0;
         this.reset_count = 0;
@@ -30,6 +31,12 @@ class WorldEnvironment extends Environment{
     }
 
     update() {
+
+        // update all emitters (poop food)
+        for (var i in this.emitters) {
+            this.emitters[i].update();
+        }
+
         var to_remove = [];
         for (var i in this.organisms) {
             var org = this.organisms[i];
@@ -218,12 +225,23 @@ class WorldEnvironment extends Environment{
 
     loadRaw(env) { // species name->stats map, evolution controls, 
         this.organisms = [];
+        this.emitters = [];
         FossilRecord.clear_record();
         let cell_size = env.grid.cell_size ? env.grid.cell_size : this.grid_map.cell_size;
         this.resizeGridColRow(cell_size, env.grid.cols, env.grid.rows)
         this.grid_map.loadRaw(env.grid);
         for (let wall of env.grid.walls) {
             this.walls.push(this.grid_map.cellAt(wall.c, wall.r));
+        }
+
+        // create emitters and push to array
+        let EmitterCell = require('../Organism/Cell/EmitterCell');
+        if (env.grid.emitters) {
+            for (let e of env.grid.emitters) {
+                // e.t represents the food type that was stored in the grid during serialization
+                let emitter = new EmitterCell(this, e.c, e.r, e.t); 
+                this.emitters.push(emitter);
+            }
         }
 
         // create species map

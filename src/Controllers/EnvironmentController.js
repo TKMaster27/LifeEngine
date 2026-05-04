@@ -122,6 +122,27 @@ class EnvironmentController extends CanvasController{
                         this.dropCellType(cell.col, cell.row, CellStates.empty, false, CellStates.wall);
                     }
                     break;
+                case Modes.EmitterDrop: // Add this new case block
+                    if (left_click){
+                        // Remove whatever is there 
+                        this.dropCellType(cell.col, cell.row, CellStates.empty, true);
+
+                        // Grab the currently selected food type from the panel
+                        const foodType = this.control_panel ? this.control_panel.selectedFoodType : 1;
+                        
+                        // create a new emitter
+                        let EmitterCell = require('../Organism/Cell/EmitterCell');
+                        let emitter = new EmitterCell(this.env, cell.col, cell.row, foodType);
+                        this.env.emitters.push(emitter);
+                        
+                        // add emitter cell
+                        this.env.changeCell(cell.col, cell.row, CellStates.emitter, null); 
+                    }
+                    else if (right_click){
+                        
+                        this.dropCellType(cell.col, cell.row, CellStates.empty, false);
+                    }
+                    break;
                 case Modes.WallDrop:
                         if (left_click){
                             this.dropCellType(cell.col, cell.row, CellStates.wall, true);
