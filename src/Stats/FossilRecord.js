@@ -80,6 +80,7 @@ const FossilRecord = {
         this.av_cells = [];
         this.av_cell_counts = [];
         this.species_diet_counts = [];
+        this.population_diet_counts = [];
         this.updateData();
     },
 
@@ -90,6 +91,7 @@ const FossilRecord = {
         this.species_counts.push(this.numExtantSpecies());
         this.av_mut_rates.push(this.env.averageMutability());
         this.species_diet_counts.push(this.calcDietSpecializationCounts());
+        this.population_diet_counts.push(this.calcPopulationDietCounts());
         this.calcCellCountAverages();
         while (this.tick_record.length > this.record_size_limit) {
             this.tick_record.shift();
@@ -99,6 +101,7 @@ const FossilRecord = {
             this.av_cells.shift();
             this.av_cell_counts.shift();
             this.species_diet_counts.shift();
+            this.population_diet_counts.shift();
         }
     },
 
@@ -128,6 +131,38 @@ const FossilRecord = {
                 counts.type3_only++;
             } else {
                 counts.none++;
+            }
+        }
+        return counts;
+    },
+
+    calcPopulationDietCounts() {
+        const counts = {
+            type0_only: 0,
+            type1_only: 0,
+            type2_only: 0,
+            type3_only: 0,
+            generalist: 0,
+            none: 0
+        };
+
+        for (let s of Object.values(this.extant_species)) {
+            const pop = s.population || 0;
+            const diets = Array.isArray(s.mouth_diets) ? s.mouth_diets : [];
+            if (diets.length === 0) {
+                counts.none += pop;
+            } else if (diets.length > 1) {
+                counts.generalist += pop;
+            } else if (diets[0] === 0) {
+                counts.type0_only += pop;
+            } else if (diets[0] === 1) {
+                counts.type1_only += pop;
+            } else if (diets[0] === 2) {
+                counts.type2_only += pop;
+            } else if (diets[0] === 3) {
+                counts.type3_only += pop;
+            } else {
+                counts.none += pop;
             }
         }
         return counts;
@@ -194,6 +229,7 @@ const FossilRecord = {
             av_cells:this.av_cells,
             av_cell_counts:this.av_cell_counts,
             species_diet_counts: this.species_diet_counts,
+            population_diet_counts: this.population_diet_counts,
         };
         let species = {};
         for (let s of Object.values(this.extant_species)) {

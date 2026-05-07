@@ -1,12 +1,12 @@
 const FossilRecord = require("../FossilRecord");
 const ChartController = require("./ChartController");
 
-class DietSpecializationChart extends ChartController {
+class PopulationDietSpecializationChart extends ChartController {
     constructor() {
         super(
-            "Diet Specialization",
-            "Number of Extant Species",
-            "Species counted by mouth diet capability: specialists vs generalists."
+            "Population Diet Specialization",
+            "Number of Organisms",
+            "Organisms counted by mouth diet capability: specialists vs generalists."
         );
     }
 
@@ -65,7 +65,7 @@ class DietSpecializationChart extends ChartController {
 
     addDataPoint(i) {
         const t = FossilRecord.tick_record[i];
-        const d = FossilRecord.species_diet_counts[i] || { type0_only: 0, type1_only: 0, type2_only: 0, type3_only: 0, generalist: 0, none: 0 };
+        const d = FossilRecord.population_diet_counts[i] || { type0_only: 0, type1_only: 0, type2_only: 0, type3_only: 0, generalist: 0, none: 0 };
         this.data[0].dataPoints.push({ x: t, y: d.type0_only || 0 });
         this.data[1].dataPoints.push({ x: t, y: d.type1_only || 0 });
         this.data[2].dataPoints.push({ x: t, y: d.type2_only || 0 });
@@ -75,4 +75,4 @@ class DietSpecializationChart extends ChartController {
     }
 }
 
-module.exports = DietSpecializationChart;
+module.exports = PopulationDietSpecializationChart;
