@@ -2,9 +2,9 @@ const Neighbors = require("./Grid/Neighbors");
 
 const Hyperparams = {
     setDefaults: function() {
-        this.lifespanMultiplier = 100;
+        this.lifespanMultiplier = 1000;
         this.foodProdProb = 3;
-        this.emitterProdProb = 15;
+        this.emitterProdProb = 5;
         this.killableNeighbors = Neighbors.adjacent;
         this.edibleNeighbors = Neighbors.adjacent;
         this.growableNeighbors = Neighbors.adjacent;
@@ -25,7 +25,7 @@ const Hyperparams = {
         this.instaKill = false;
         this.dontKillSameSpecies = false;
 
-        this.lookRange = 30;
+        this.lookRange = 300;
         this.seeThroughSelf = false;
         this.evolveIndependentEyeDecisions = true;
 

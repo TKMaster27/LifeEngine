@@ -339,6 +339,9 @@ class ControlPanel {
         $('#food-prod-prob').change(function() {
             Hyperparams.foodProdProb = $('#food-prod-prob').val();
         }.bind(this));
+        $('#emitter-prod-prob').change(function() {
+            Hyperparams.emitterProdProb = $('#emitter-prod-prob').val();
+        }.bind(this));
         $('#lifespan-multiplier').change(function() {
             Hyperparams.lifespanMultiplier = $('#lifespan-multiplier').val();
         }.bind(this));
@@ -457,6 +460,7 @@ class ControlPanel {
 
     updateHyperparamUIValues(){
         $('#food-prod-prob').val(Hyperparams.foodProdProb);
+        $('#emitter-prod-prob').val(Hyperparams.emitterProdProb);
         $('#lifespan-multiplier').val(Hyperparams.lifespanMultiplier);
         $('#rot-enabled').prop('checked', Hyperparams.rotationEnabled);
         $('#insta-kill').prop('checked', Hyperparams.instaKill);
