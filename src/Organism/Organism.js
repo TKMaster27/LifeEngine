@@ -154,9 +154,15 @@ class Organism {
         }
         if (this.calcRandomChance(Hyperparams.changeProb)){
             let cell = this.anatomy.getRandomCell();
-            let state = CellStates.getRandomLivingType();
-            this.anatomy.replaceCell(state, cell.loc_col, cell.loc_row);
-            changed = true;
+            // Mutate the mouth diet directly if we happen to randomly mutate a mouth cell
+            if (cell.state === CellStates.mouth && this.calcRandomChance(50)) {
+                cell.diet = Hyperparams.getRandomFoodTypeId();
+                changed = true;
+            } else {
+                let state = CellStates.getRandomLivingType();
+                this.anatomy.replaceCell(state, cell.loc_col, cell.loc_row);
+                changed = true;
+            }
         }
         if (this.calcRandomChance(Hyperparams.removeProb)){
             if(this.anatomy.cells.length > 1) {
