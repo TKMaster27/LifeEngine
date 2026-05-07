@@ -22,10 +22,24 @@ class MouthCell extends BodyCell{
     eatNeighbor(n_cell, env) {
         if (n_cell == null)
             return;
-        if (n_cell.state == CellStates.food && n_cell.foodType == this.diet){
+        if (n_cell.state == CellStates.food){
             
             const baseNutrition = (typeof n_cell.nutrition === "number") ? n_cell.nutrition : 1.0;
-            const efficiency = this.org.foodAbsorptionMultiplier();
+            
+            // const inDiet = this.org.getEdibleFoodTypes().includes(n_cell.foodType);
+            // const efficiency = inDiet ? this.org.foodAbsorptionMultiplier() : 0.05;
+            
+            
+            // Get the diet array ONCE
+            const edibleTypes = this.org.getEdibleFoodTypes(); 
+            const inDiet = edibleTypes.includes(n_cell.foodType);
+            
+            // Calculate efficiency based on array length
+            let efficiency = 0.05; // Default to wrong-food penalty
+            if (inDiet) {
+                efficiency = edibleTypes.length > 1 ? (1 / Math.sqrt(edibleTypes.length)) : 1.0;
+            }
+            
 
 
             this.org.food_collected += baseNutrition * efficiency;
