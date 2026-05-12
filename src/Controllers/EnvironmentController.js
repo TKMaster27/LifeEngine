@@ -65,12 +65,12 @@ class EnvironmentController extends CanvasController{
         let resolution = 20;
         Perlin.seed();
 
-        for (let r = 0; r < this.env.num_rows; r++) {
-            for (let c = 0; c < this.env.num_cols; c++) {
-                let xval = c/this.env.num_cols*(resolution/this.env.renderer.cell_size*(this.env.num_cols/this.env.num_rows));
-                let yval = r/this.env.num_rows*(resolution/this.env.renderer.cell_size*(this.env.num_rows/this.env.num_cols));
+        for (let r = 0; r < this.env.grid_map.rows; r++) {
+            for (let c = 0; c < this.env.grid_map.cols; c++) {
+                let xval = c/this.env.grid_map.cols*(resolution/this.env.renderer.cell_size*(this.env.grid_map.cols/this.env.grid_map.rows));
+                let yval = r/this.env.grid_map.rows*(resolution/this.env.renderer.cell_size*(this.env.grid_map.rows/this.env.grid_map.cols));
                 let noise = Perlin.get(xval, yval);
-                avg_noise += noise/(this.env.num_rows*this.env.num_cols);
+                avg_noise += noise/(this.env.grid_map.rows*this.env.grid_map.cols);
                 if (noise > noise_threshold && noise < noise_threshold + thickness/resolution) {
                     let cell = this.env.grid_map.cellAt(c, r);
                     if (cell != null) {
@@ -81,6 +81,86 @@ class EnvironmentController extends CanvasController{
             }
         }
     }
+
+    randomizeEmitters(thickness = 1, foodType = 0, noiseThreshold = 0.3, resolution = 50, islandSize = 0.1) {
+    this.env.clearEmitters();
+    Perlin.seed();
+
+    // First pass: identify which cells will have emitters based on Perlin placement
+    let emitterPlacement = new Set();
+    let placementGrid = {};
+
+    for (let r = 0; r < this.env.grid_map.rows; r++) {
+        for (let c = 0; c < this.env.grid_map.cols; c++) {
+            let xval = c/this.env.grid_map.cols*(resolution/this.env.renderer.cell_size*(this.env.grid_map.cols/this.env.grid_map.rows));
+            let yval = r/this.env.grid_map.rows*(resolution/this.env.renderer.cell_size*(this.env.grid_map.rows/this.env.grid_map.cols));
+            let noise = Perlin.get(xval, yval);
+            if (noise > noiseThreshold && noise < noiseThreshold + thickness/resolution) {
+                let key = c + ',' + r;
+                emitterPlacement.add(key);
+                placementGrid[key] = { c, r, visited: false, island: -1 };
+            }
+        }
+    }
+
+    // Second pass: identify islands (connected components) using flood fill
+    let islandId = 0;
+    for (let key of emitterPlacement) {
+        let cell = placementGrid[key];
+        if (!cell.visited) {
+            // Flood fill to mark all connected cells with this island ID
+            let stack = [cell];
+            while (stack.length > 0) {
+                let current = stack.pop();
+                if (current.visited) continue;
+                current.visited = true;
+                current.island = islandId;
+
+                // Check 4 adjacent neighbors (up, down, left, right)
+                let neighbors = [
+                    { c: current.c + 1, r: current.r },
+                    { c: current.c - 1, r: current.r },
+                    { c: current.c, r: current.r + 1 },
+                    { c: current.c, r: current.r - 1 },
+                    { c: current.c + 1, r: current.r + 1 },
+                    { c: current.c + 1, r: current.r - 1 },
+                    { c: current.c - 1, r: current.r + 1 },
+                    { c: current.c - 1, r: current.r - 1 }
+                    
+                ];
+                for (let neighbor of neighbors) {
+                    let nkey = neighbor.c + ',' + neighbor.r;
+                    if (emitterPlacement.has(nkey) && !placementGrid[nkey].visited) {
+                        stack.push(placementGrid[nkey]);
+                    }
+                }
+            }
+            islandId++;
+        }
+    }
+
+    // Third pass: assign one food type per island (cycle through 1, 2, 3)
+    let islandTypes = {};
+    for (let i = 0; i < islandId; i++) {
+        islandTypes[i] = (i % 3) + 1; // cycle 1, 2, 3
+    }
+
+    // Fourth pass: create emitter cells with their island's food type
+    for (let key of emitterPlacement) {
+        let placement = placementGrid[key];
+        let cell = this.env.grid_map.cellAt(placement.c, placement.r);
+        if (cell != null) {
+            if (cell.owner != null) cell.owner.die();
+
+            let currentFoodType = islandTypes[placement.island];
+
+            let EmitterCell = require('../Organism/Cell/EmitterCell');
+            let emitter = new EmitterCell(this.env, placement.c, placement.r, currentFoodType);
+            this.env.emitters.push(emitter);
+            this.env.changeCell(placement.c, placement.r, CellStates.emitter, null);
+        }
+    }
+}
 
     updateMouseLocation(offsetX, offsetY){
         super.updateMouseLocation(offsetX, offsetY);

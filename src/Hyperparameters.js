@@ -5,6 +5,10 @@ const Hyperparams = {
         this.lifespanMultiplier = 1000;
         this.foodProdProb = 3;
         this.emitterProdProb = 5;
+        // Emitter generation controls (used by EnvironmentController.randomizeEmitters)
+        this.emitterNoiseThreshold = 0.3; // default Perlin threshold for emitter placement
+        this.emitterResolution = 50; // Perlin resolution for emitter placement
+        this.emitterIslandSize = 0.1; // scale for secondary noise that defines island sizes
         this.killableNeighbors = Neighbors.adjacent;
         this.edibleNeighbors = Neighbors.adjacent;
         this.growableNeighbors = Neighbors.adjacent;

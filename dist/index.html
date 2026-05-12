@@ -169,8 +169,19 @@
 					</div>
 					<div class='right-half'>
 						<br>
+						<button id="random-emitters">Generate Emitters</button>
+						<label for="emitter-noise-threshold">Noise Threshold:</label>
+						<input type="number" id="emitter-noise-threshold" min="-1" max="1" value="0.3" step="0.05">
+						<br>
+						<label for="emitter-resolution">Resolution:</label>
+						<input type="number" id="emitter-resolution" min="1" max="200" value="50" step="5">
+						<br>
+						<label for="emitter-island-size" title="Smaller = bigger islands">Island Size:</label>
+						<input type="number" id="emitter-island-size" min="0.01" max="1" value="0.1" step="0.05">
+						<br>
 						<button id='random-walls' title="Generates random walls.">Generate random walls</button> <br>
 						<button id="clear-walls" title="Clear All Walls. Hotkey: B">Clear all walls</button>
+						<button id="clear-emitters" title="Clear All Emitters">Clear all emitters</button>
 						<br>
 						<label for="clear-walls-reset" title='When on, walls will be cleared when the environment resets'>Clear walls on reset</label>
 						<input type="checkbox" id="clear-walls-reset">

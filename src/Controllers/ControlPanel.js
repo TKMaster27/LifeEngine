@@ -566,8 +566,17 @@ class ControlPanel {
         $('#random-walls').click( function() {
             this.env_controller.randomizeWalls();
         }.bind(this));
+        $('#random-emitters').click( function() {
+            const noiseThreshold = parseFloat(document.getElementById('emitter-noise-threshold')?.value || 0.3);
+            const resolution = parseInt(document.getElementById('emitter-resolution')?.value || 50);
+            const islandSize = parseFloat(document.getElementById('emitter-island-size')?.value || 0.1);
+            this.env_controller.randomizeEmitters(1, this.selectedFoodType, noiseThreshold, resolution, islandSize);
+        }.bind(this));
         $('#clear-walls').click( function() {
             this.engine.env.clearWalls();
+        }.bind(this));
+        $('#clear-emitters').click( function() {
+            this.engine.env.clearEmitters();
         }.bind(this));
         $('#clear-editor').click( function() {
             this.engine.organism_editor.setDefaultOrg();
