@@ -245,6 +245,42 @@ const FossilRecord = {
         for (let key in record.records) {
             this[key] = record.records[key];
         }
+    },
+
+    exportSpeciesDietCountsCSV() {
+        let csv = 'tick,type0_only,type1_only,type2_only,type3_only,generalist,none\n';
+        for (let i = 0; i < this.tick_record.length; i++) {
+            const tick = this.tick_record[i];
+            const dietCounts = this.species_diet_counts[i] || {};
+            csv += `${tick},${dietCounts.type0_only || 0},${dietCounts.type1_only || 0},${dietCounts.type2_only || 0},${dietCounts.type3_only || 0},${dietCounts.generalist || 0},${dietCounts.none || 0}\n`;
+        }
+        return csv;
+    },
+
+    exportPopulationCountsCSV() {
+        let csv = 'tick,population\n';
+        for (let i = 0; i < this.tick_record.length; i++) {
+            csv += `${this.tick_record[i]},${this.pop_counts[i] || 0}\n`;
+        }
+        return csv;
+    },
+
+    exportSpeciesCountsCSV() {
+        let csv = 'tick,species\n';
+        for (let i = 0; i < this.tick_record.length; i++) {
+            csv += `${this.tick_record[i]},${this.species_counts[i] || 0}\n`;
+        }
+        return csv;
+    },
+
+    exportPopulationDietCountsCSV() {
+        let csv = 'tick,type0_only,type1_only,type2_only,type3_only,generalist,none\n';
+        for (let i = 0; i < this.tick_record.length; i++) {
+            const tick = this.tick_record[i];
+            const dietCounts = this.population_diet_counts[i] || {};
+            csv += `${tick},${dietCounts.type0_only || 0},${dietCounts.type1_only || 0},${dietCounts.type2_only || 0},${dietCounts.type3_only || 0},${dietCounts.generalist || 0},${dietCounts.none || 0}\n`;
+        }
+        return csv;
     }
 
 }

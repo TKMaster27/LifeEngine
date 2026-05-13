@@ -245,9 +245,9 @@ class Brain {
                 let observedName = obs.cell.state.name;
 
                 // Treat non-edible food as wall for decision making.
-                if (obs.cell.state === CellStates.food && !this.canEatFoodType(obs.cell.foodType)) {
-                    observedName = CellStates.wall.name;
-                }
+                // if (obs.cell.state === CellStates.food && !this.canEatFoodType(obs.cell.foodType)) {
+                //     observedName = CellStates.wall.name;
+                // }
 
                 decision = this.decisions[eye_index][this.state][observedName];
                 move_direction = obs.direction;

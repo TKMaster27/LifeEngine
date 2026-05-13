@@ -137,6 +137,15 @@ class WorldEnvironment extends Environment{
         }
     }
 
+    clearEmitters() {
+        for(var emitter of this.emitters){
+            let ecell = this.grid_map.cellAt(emitter.col, emitter.row);
+            if (ecell && ecell.state == CellStates.emitter)
+                this.changeCell(emitter.col, emitter.row, CellStates.empty, null);
+        }
+        this.emitters = [];
+    }
+
     clearOrganisms() {
         for (var org of this.organisms)
             org.die();

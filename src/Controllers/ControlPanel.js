@@ -339,6 +339,9 @@ class ControlPanel {
         $('#food-prod-prob').change(function() {
             Hyperparams.foodProdProb = $('#food-prod-prob').val();
         }.bind(this));
+        $('#emitter-prod-prob').change(function() {
+            Hyperparams.emitterProdProb = $('#emitter-prod-prob').val();
+        }.bind(this));
         $('#lifespan-multiplier').change(function() {
             Hyperparams.lifespanMultiplier = $('#lifespan-multiplier').val();
         }.bind(this));
@@ -457,6 +460,7 @@ class ControlPanel {
 
     updateHyperparamUIValues(){
         $('#food-prod-prob').val(Hyperparams.foodProdProb);
+        $('#emitter-prod-prob').val(Hyperparams.emitterProdProb);
         $('#lifespan-multiplier').val(Hyperparams.lifespanMultiplier);
         $('#rot-enabled').prop('checked', Hyperparams.rotationEnabled);
         $('#insta-kill').prop('checked', Hyperparams.instaKill);
@@ -562,8 +566,17 @@ class ControlPanel {
         $('#random-walls').click( function() {
             this.env_controller.randomizeWalls();
         }.bind(this));
+        $('#random-emitters').click( function() {
+            const noiseThreshold = parseFloat(document.getElementById('emitter-noise-threshold')?.value || 0.3);
+            const resolution = parseInt(document.getElementById('emitter-resolution')?.value || 50);
+            const islandSize = parseFloat(document.getElementById('emitter-island-size')?.value || 0.1);
+            this.env_controller.randomizeEmitters(1, this.selectedFoodType, noiseThreshold, resolution, islandSize);
+        }.bind(this));
         $('#clear-walls').click( function() {
             this.engine.env.clearWalls();
+        }.bind(this));
+        $('#clear-emitters').click( function() {
+            this.engine.env.clearEmitters();
         }.bind(this));
         $('#clear-editor').click( function() {
             this.engine.organism_editor.setDefaultOrg();

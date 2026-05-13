@@ -22,6 +22,7 @@ class StatsPanel {
         this.chart_controller = new ChartSelections[selection]();
         this.chart_controller.setData();
         this.chart_controller.render();
+        this.updateDownloadButton();
     }
 
     startAutoRender() {
@@ -37,7 +38,67 @@ class StatsPanel {
         $('#chart-option').change ( function() {
             this.chart_selection = $("#chart-option")[0].selectedIndex;
             this.setChart();
+            this.updateDownloadButton();
         }.bind(this));
+
+        $('#export-chart-csv').click(() => {
+            const action = this.getDownloadAction();
+            if (!action) {
+                return;
+            }
+            const { csv, filename } = action;
+            this.downloadCSV(csv, filename);
+        });
+    }
+
+    getDownloadAction() {
+        switch (this.chart_selection) {
+            case 0:
+                return {
+                    csv: FossilRecord.exportPopulationCountsCSV(),
+                    filename: 'population-counts.csv'
+                };
+            case 1:
+                return {
+                    csv: FossilRecord.exportSpeciesCountsCSV(),
+                    filename: 'species-counts.csv'
+                };
+            case 4:
+                return {
+                    csv: FossilRecord.exportSpeciesDietCountsCSV(),
+                    filename: 'species-diet-counts.csv'
+                };
+            case 5:
+                return {
+                    csv: FossilRecord.exportPopulationDietCountsCSV(),
+                    filename: 'population-diet-counts.csv'
+                };
+            default:
+                return null;
+        }
+    }
+
+    updateDownloadButton() {
+        const action = this.getDownloadAction();
+        if (!action) {
+            $('#export-chart-csv').hide();
+            return;
+        }
+
+        $('#export-chart-csv')
+            .show()
+            .text(`Download ${action.filename.replace('.csv', '').replace(/-/g, ' ')}`);
+    }
+
+    downloadCSV(csv, filename) {
+        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+        const link = document.createElement('a');
+        link.setAttribute('href', URL.createObjectURL(blob));
+        link.setAttribute('download', filename);
+        link.style.visibility = 'hidden';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
     }
 
     updateChart() {
@@ -47,6 +108,7 @@ class StatsPanel {
         this.last_reset_count = this.env.reset_count;
         this.chart_controller.updateData();
         this.chart_controller.render();
+        this.updateDownloadButton();
     }
 
     updateDetails() {
@@ -64,6 +126,7 @@ class StatsPanel {
 
     reset() {
         this.setChart();
+        this.updateDownloadButton();
     }
     
 }

@@ -169,8 +169,19 @@
 					</div>
 					<div class='right-half'>
 						<br>
+						<button id="random-emitters">Generate Emitters</button>
+						<label for="emitter-noise-threshold">Noise Threshold:</label>
+						<input type="number" id="emitter-noise-threshold" min="-1" max="1" value="0.3" step="0.05">
+						<br>
+						<label for="emitter-resolution">Resolution:</label>
+						<input type="number" id="emitter-resolution" min="1" max="200" value="50" step="5">
+						<br>
+						<label for="emitter-island-size" title="Smaller = bigger islands">Island Size:</label>
+						<input type="number" id="emitter-island-size" min="0.01" max="1" value="0.1" step="0.05">
+						<br>
 						<button id='random-walls' title="Generates random walls.">Generate random walls</button> <br>
 						<button id="clear-walls" title="Clear All Walls. Hotkey: B">Clear all walls</button>
+						<button id="clear-emitters" title="Clear All Emitters">Clear all emitters</button>
 						<br>
 						<label for="clear-walls-reset" title='When on, walls will be cleared when the environment resets'>Clear walls on reset</label>
 						<input type="checkbox" id="clear-walls-reset">
@@ -189,6 +200,9 @@
 						<h2>Evolution Controls</h2>
 						<label for="food-prod-prob" title='The probability that a producer cell will produce food each tick.'>Probability of producing food:</label>
 						<input type="number" id="food-prod-prob" min=".001" max="100" value=4 step="1">
+						<br>
+						<label for="emitter-prod-prob" title='The probability that an emitter cell will produce food each tick.'>Probability of emitter producing:</label>
+						<input type="number" id="emitter-prod-prob" min=".001" max="100" value=5 step="1">
 						<br>
 						<label for="lifespan-multiplier" title='An organism lives for this many ticks per cell in its body.'>Lifespan multiplier:</label>
 						<input type="number" id="lifespan-multiplier" min="1" max="10000" value=100 step="1">
@@ -277,8 +291,8 @@
 							<option value="diet-specialization">Diet Specialization</option>
 							<option value="population-diet-specialization">Population Diet Specialization</option>
 						</select>
-						<p id='chart-note'></p>
-					</div>
+						<p id='chart-note'></p>					<br>
+						<button id='export-chart-csv' style='display:none;'>Download CSV</button>					</div>
 					<div class='right-half'>
 						<div id="chartContainer"></div>
 					</div>
