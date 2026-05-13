@@ -16,13 +16,16 @@ MAX_TICKS=1000000          # number of simulation ticks to run
 OUTPUT="results_${PBS_JOBID}.json"  # output file name
 CONFIG=""                  # path to a hyperparameter JSON file (leave empty to use defaults)
 LOAD=""                    # path to a saved environment JSON to start from (leave empty for fresh run)
+GRID_WIDTH=300             # grid width in columns; leave empty to use renderer default
+GRID_HEIGHT=300            # grid height in rows;   leave empty to use renderer default
+CELL_SIZE=4                # pixel size of each cell (default 4)
 LOG_EVERY=10000            # print progress every N ticks
 
 # Path to the Node 16 binary installed via nvm
-NODE_BIN="/home/tmackay/.nvm/versions/node/v16.20.2/bin/node"
+NODE_BIN=""
 
 # Project root (absolute path)
-PROJECT_DIR="/home/tmackay/LifeEngine"
+PROJECT_DIR=""
 
 # ─── Environment setup ────────────────────────────────────────────────────────
 
@@ -49,9 +52,11 @@ echo ""
 
 # ─── Build CLI arguments ──────────────────────────────────────────────────────
 
-ARGS="--max-ticks $MAX_TICKS --output $OUTPUT --log-every $LOG_EVERY"
-[ -n "$CONFIG" ] && ARGS="$ARGS --config $CONFIG"
-[ -n "$LOAD"   ] && ARGS="$ARGS --load $LOAD"
+ARGS="--max-ticks $MAX_TICKS --output $OUTPUT --cell-size $CELL_SIZE --log-every $LOG_EVERY"
+[ -n "$CONFIG"      ] && ARGS="$ARGS --config $CONFIG"
+[ -n "$LOAD"        ] && ARGS="$ARGS --load $LOAD"
+[ -n "$GRID_WIDTH"  ] && ARGS="$ARGS --width $GRID_WIDTH"
+[ -n "$GRID_HEIGHT" ] && ARGS="$ARGS --height $GRID_HEIGHT"
 
 # ─── Run simulation ───────────────────────────────────────────────────────────
 
