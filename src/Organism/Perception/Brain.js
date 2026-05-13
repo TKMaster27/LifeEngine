@@ -28,7 +28,10 @@ class Brain {
         this.owner = owner;
         this.num_states = 1;
         this.state = 0;
-        this.observations = [];
+        // this.observations = [];
+        this.closest_distance = Hyperparams.lookRange + 1;
+        this.best_observation = null;
+        this.winning_eye_index = 0;
         this.decisions = [[ this.newDecisionMap() ]];
         this.eye_cell_count = 0;
         this.independent_eye_decisions = false;
@@ -221,8 +224,13 @@ class Brain {
         }
     }
 
-    observe(observation) {
-        this.observations.push(observation);
+    observe(cell, distance, direction, eye_index) {
+        // if the observation is closer than the current closest one
+        if (cell !== null && cell.owner !== this.owner && distance < this.closest_distance) {
+            this.closest_distance = distance;
+            this.best_observation = { cell, direction }; 
+            this.winning_eye_index = eye_index;
+        }
     }
 
     decide() {
@@ -232,29 +240,21 @@ class Brain {
         };
         let closest = Hyperparams.lookRange + 1;
         let move_direction = 0;
-        for (let i = 0; i < this.observations.length; i++) {
-            let obs = this.observations[i];
-            if (obs.cell == null || obs.cell.owner == this.owner) {
-                continue;
-            }
-            if (obs.distance < closest) {
-                const eye_index = (i < this.decisions.length) ? i : 0;
-                if (this.state >= this.num_states) {
-                    console.error('state out of bounds', this.state, this.num_states);
-                }
-                let observedName = obs.cell.state.name;
 
-                // Treat non-edible food as wall for decision making.
-                // if (obs.cell.state === CellStates.food && !this.canEatFoodType(obs.cell.foodType)) {
-                //     observedName = CellStates.wall.name;
-                // }
+        if (this.best_observation) {
+            let observedName = this.best_observation.cell.state.name;
 
-                decision = this.decisions[eye_index][this.state][observedName];
-                move_direction = obs.direction;
-                closest = obs.distance;
-            }
+            let safe_eye_index = (this.winning_eye_index < this.decisions.length) ? this.winning_eye_index : 0;
+            
+            // Note: Using eye index 0 here based on the original logic
+            decision = this.decisions[safe_eye_index][this.state][observedName];
+            move_direction = this.best_observation.direction;
         }
-        this.observations = [];
+
+        this.closest_distance = Hyperparams.lookRange + 1;
+        this.best_observation = null;
+        this.winning_eye_index = 0;
+
         this.state = decision.state;
         return {decision: decision.decision, move_direction};
     }

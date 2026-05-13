@@ -2,7 +2,7 @@ const CellStates = require("../CellStates");
 const BodyCell = require("./BodyCell");
 const Hyperparams = require("../../../Hyperparameters");
 const Directions = require("../../Directions");
-const Observation = require("../../Perception/Observation")
+// const Observation = require("../../Perception/Observation")
 
 class EyeCell extends BodyCell{
     constructor(org, loc_col, loc_row){
@@ -34,8 +34,7 @@ class EyeCell extends BodyCell{
     }
 
     performFunction() {
-        var obs = this.look();
-        this.org.brain.observe(obs);
+        this.look();
     }
 
     look() {
@@ -43,6 +42,16 @@ class EyeCell extends BodyCell{
         var direction = this.getAbsoluteDirection();
         var addCol = 0;
         var addRow = 0;
+
+        // Find relative eye index
+        let my_eye_index = 0;
+        for (let c of this.org.anatomy.cells) {
+            if (c.state.name === CellStates.eye.name) {
+                if (c === this) break;
+                my_eye_index++;
+            }
+        }
+
         switch(direction) {
             case Directions.up:
                 addRow = -1;
@@ -74,10 +83,12 @@ class EyeCell extends BodyCell{
             }
             if (cell.state !== CellStates.empty) {
                 var distance = Math.abs(start_col-col) + Math.abs(start_row-row);
-                return new Observation(cell, distance, direction);
+                this.org.brain.observe(cell, distance, direction, my_eye_index);
+                // return new Observation(cell, distance, direction);
             }
         }
-        return new Observation(cell, Hyperparams.lookRange, direction);
+        this.org.brain.observe(cell, distance, direction, my_eye_index);
+        // return new Observation(cell, Hyperparams.lookRange, direction);
     }
 }
 
