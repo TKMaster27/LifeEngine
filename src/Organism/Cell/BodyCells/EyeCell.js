@@ -42,53 +42,57 @@ class EyeCell extends BodyCell{
         var direction = this.getAbsoluteDirection();
         var addCol = 0;
         var addRow = 0;
-
-        // Find relative eye index
-        let my_eye_index = 0;
-        for (let c of this.org.anatomy.cells) {
-            if (c.state.name === CellStates.eye.name) {
-                if (c === this) break;
-                my_eye_index++;
-            }
-        }
-
+        
         switch(direction) {
-            case Directions.up:
-                addRow = -1;
-                break;
-            case Directions.down:
-                addRow = 1;
-                break;
-            case Directions.right:
-                addCol = 1;
-                break;
-            case Directions.left:
-                addCol = -1;
-                break;
+            case Directions.up: addRow = -1; break;
+            case Directions.down: addRow = 1; break;
+            case Directions.right: addCol = 1; break;
+            case Directions.left: addCol = -1; break;
         }
+        
         var start_col = this.getRealCol();
         var start_row = this.getRealRow();
         var col = start_col;
         var row = start_row;
         var cell = null;
+
+        var map = env.grid_map;
+        var grid = map.grid;
+        var maxCol = map.cols;
+        var maxRow = map.rows;
+
+        let my_eye_index = 0;
+        if (this.org.brain.independent_eye_decisions) {
+            for (let c of this.org.anatomy.cells) {
+                if (c.state.name === CellStates.eye.name) {
+                    if (c === this) break;
+                    my_eye_index++;
+                }
+            }
+        }
+
         for (var i=0; i<Hyperparams.lookRange; i++){
-            col+=addCol;
-            row+=addRow;
-            cell = env.grid_map.cellAt(col, row);
-            if (cell == null) {
+            col += addCol;
+            row += addRow;
+
+            if (col < 0 || col >= maxCol || row < 0 || row >= maxRow) {
                 break;
             }
+
+            cell = grid[col][row];
+
             if (cell.owner === this.org && Hyperparams.seeThroughSelf) {
                 continue;
             }
+
             if (cell.state !== CellStates.empty) {
                 var distance = Math.abs(start_col-col) + Math.abs(start_row-row);
                 this.org.brain.observe(cell, distance, direction, my_eye_index);
-                // return new Observation(cell, distance, direction);
+                return;
             }
         }
-        this.org.brain.observe(cell, distance, direction, my_eye_index);
-        // return new Observation(cell, Hyperparams.lookRange, direction);
+
+        this.org.brain.observe(cell, Hyperparams.lookRange, direction, my_eye_index);
     }
 }
 
