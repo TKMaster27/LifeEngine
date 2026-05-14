@@ -20,6 +20,10 @@ const FossilRecord = {
 
     addSpecies: function(org, ancestor) {
         var new_species = new Species(org.anatomy, ancestor, this.env.total_ticks);
+        // capture founder brain weights for post-run analysis
+        if (org.brain && typeof org.brain.serialize === 'function') {
+            new_species.founder_brain = org.brain.serialize();
+        }
         this.extant_species[new_species.name] = new_species;
         org.species = new_species;
         return new_species;
@@ -56,11 +60,10 @@ const FossilRecord = {
         species.end_tick = this.env.total_ticks;
         species.ancestor = undefined; // garbage collect ancestors
         delete this.extant_species[species.name];
-        if (species.cumulative_pop >= this.min_discard) {
-            // TODO: store as extinct species
-            return true;
-        }
-        return false;
+        // Always retain extinct species so their founder_brain survives extinction.
+        // min_discard is still used elsewhere to filter sparse species out of averages.
+        this.extinct_species[species.name] = species;
+        return species.cumulative_pop >= this.min_discard;
     },
 
     resurrect: function(species) {
@@ -234,10 +237,30 @@ const FossilRecord = {
         let species = {};
         for (let s of Object.values(this.extant_species)) {
             species[s.name] = SerializeHelper.copyNonObjects(s);
-            delete species[s.name].name; // the name will be used as the key, so remove it from the value
+            delete species[s.name].name;
+            if (s.founder_brain) species[s.name].founder_brain = s.founder_brain;
         }
         record.species = species;
         return record;
+    },
+
+    // Returns founder brains ranked by cumulative population, best first.
+    // Useful for identifying which starting weights produced stable lineages.
+    exportFounderBrainsRanked: function() {
+        const combined = Object.values(this.extant_species)
+            .concat(Object.values(this.extinct_species))
+            .filter(s => s.founder_brain)
+            .sort((a, b) => b.cumulative_pop - a.cumulative_pop);
+        return combined.map(s => ({
+            species:        s.name,
+            extinct:        !!s.extinct,
+            start_tick:     s.start_tick,
+            end_tick:       s.end_tick,
+            cumulative_pop: s.cumulative_pop,
+            mouth_diets:    s.mouth_diets,
+            cell_counts:    s.cell_counts,
+            founder_brain:  s.founder_brain,
+        }));
     },
 
     loadRaw(record) {

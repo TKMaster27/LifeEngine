@@ -257,7 +257,9 @@ class WorldEnvironment extends Environment{
         let species = {};
         for (let name in env.fossil_record.species) {
             let s = new Species(null, null, 0);
-            SerializeHelper.overwriteNonObjects(env.fossil_record.species[name], s)
+            let raw = env.fossil_record.species[name];
+            SerializeHelper.overwriteNonObjects(raw, s)
+            if (raw.founder_brain) s.founder_brain = raw.founder_brain; // object — copied explicitly
             species[name] = s; // the species needs an anatomy obj still
         }
 
@@ -274,6 +276,10 @@ class WorldEnvironment extends Environment{
                 //if the species doesn't have anatomy we need to initialize it
                 s.anatomy = org.anatomy;
                 s.calcAnatomyDetails();
+            }
+            // fall back to current org's brain if the founder wasn't recorded
+            if (!s.founder_brain && org.brain && typeof org.brain.serialize === 'function') {
+                s.founder_brain = org.brain.serialize();
             }
             s.name = orgRaw.species_name;
             org.species = s;

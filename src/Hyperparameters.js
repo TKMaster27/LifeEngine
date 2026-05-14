@@ -15,9 +15,9 @@ const Hyperparams = {
 
         this.useGlobalMutability = false;
         this.globalMutability = 5;
-        this.addProb = 25;
-        this.changeProb = 25;
-        this.removeProb = 25;
+        this.addProb = 5;
+        this.changeProb = 5;
+        this.removeProb = 5;
         this.brainMutationChance = 25;
         this.mutationSymmetryChance = 10;
         

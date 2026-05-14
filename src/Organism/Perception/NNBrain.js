@@ -2,14 +2,47 @@ const Hyperparams = require("../../Hyperparameters");
 const CellStates = require("../Cell/CellStates");
 const Brain = require("./Brain");
 
-// Build a stable name→index map once from CellStates.all so one-hot encoding is deterministic.
-// The 10 states (in order): empty, food, wall, mouth, producer, emitter, mover, killer, armor, eye
-const CELL_STATE_INDEX = {};
-CellStates.all.forEach((s, i) => { CELL_STATE_INDEX[s.name] = i; });
-const N_CELL_TYPES = CellStates.all.length; // 10
+// Feature indices per eye observation.
+// Food is split into 4 type-specific slots so the brain can distinguish diets.
+const FEAT_EMPTY    = 0;
+const FEAT_FOOD_0   = 1;
+const FEAT_FOOD_1   = 2;
+const FEAT_FOOD_2   = 3;
+const FEAT_FOOD_3   = 4;
+const FEAT_WALL     = 5;
+const FEAT_MOUTH    = 6;
+const FEAT_PRODUCER = 7;
+const FEAT_EMITTER  = 8;
+const FEAT_MOVER    = 9;
+const FEAT_KILLER   = 10;
+const FEAT_ARMOR    = 11;
+const FEAT_EYE      = 12;
+const N_CELL_FEATURES = 13;
 
-// Inputs per eye: N_CELL_TYPES one-hot + normalised distance + dx + dy = 13
-const INPUTS_PER_EYE = N_CELL_TYPES + 3;
+// Inputs per eye: N_CELL_FEATURES one-hot + normalised distance + dx + dy = 16
+const INPUTS_PER_EYE = N_CELL_FEATURES + 3;
+
+// Map a grid cell to its feature index.
+function cellFeatureIndex(cell) {
+    if (!cell || !cell.state || cell.state === CellStates.empty) return FEAT_EMPTY;
+    const name = cell.state.name;
+    if (name === 'food') {
+        const ft = (typeof cell.foodType === 'number' && cell.foodType >= 0 && cell.foodType <= 3)
+            ? cell.foodType : 0;
+        return FEAT_FOOD_0 + ft;
+    }
+    switch (name) {
+        case 'wall':     return FEAT_WALL;
+        case 'mouth':    return FEAT_MOUTH;
+        case 'producer': return FEAT_PRODUCER;
+        case 'emitter':  return FEAT_EMITTER;
+        case 'mover':    return FEAT_MOVER;
+        case 'killer':   return FEAT_KILLER;
+        case 'armor':    return FEAT_ARMOR;
+        case 'eye':      return FEAT_EYE;
+        default:         return FEAT_EMPTY;
+    }
+}
 
 function gaussRandom() {
     let u = 0, v = 0;
@@ -26,48 +59,72 @@ class NNBrain extends Brain {
         this.n_inputs = 0;
         this.n_outputs = 0;
         this.obs_buffer = new Float32Array(0);
-        // compatibility stubs for EditorController (FSM brain editor gracefully shows nothing)
         this.eye_cell_count = 0;
         this.buildSubstrate();
     }
 
-    buildSubstrate() {
+    // Collect the set of food type IDs that this organism's mouth cells eat.
+    _getDietSet() {
+        const diet = new Set();
+        for (const c of this.owner.anatomy.cells) {
+            if (c.state === CellStates.mouth && typeof c.diet === 'number') {
+                diet.add(c.diet);
+            }
+        }
+        return diet;
+    }
+
+    buildSubstrate(excludeCell = null) {
         let n_eyes = 0;
         let n_movers = 0;
         for (const c of this.owner.anatomy.cells) {
-            if (c.state === CellStates.eye) n_eyes++;
+            if (c === excludeCell) continue;
+            if (c.state === CellStates.eye)   n_eyes++;
             else if (c.state === CellStates.mover) n_movers++;
         }
         this.eye_cell_count = n_eyes;
 
-        const new_n_inputs = n_eyes * INPUTS_PER_EYE;
+        const new_n_inputs  = n_eyes * INPUTS_PER_EYE;
         const new_n_outputs = n_movers;
 
         if (new_n_inputs === this.n_inputs && new_n_outputs === this.n_outputs) return;
 
         const old_weights = this.weights;
-        const old_size = this.n_inputs * this.n_outputs;
-        const new_size = new_n_inputs * new_n_outputs;
+        const old_size    = this.n_inputs * this.n_outputs;
+        const new_size    = new_n_inputs  * new_n_outputs;
 
-        this.n_inputs = new_n_inputs;
+        this.n_inputs  = new_n_inputs;
         this.n_outputs = new_n_outputs;
 
         const new_weights = new Float32Array(new_size);
-        const preserve = Math.min(old_size, new_size);
-        for (let i = 0; i < preserve; i++) {
-            new_weights[i] = old_weights[i];
-        }
-        // new connections initialised with a "chase food, flee killers" prior so fresh organisms
-        // start with sensible directed behaviour rather than frozen random noise.
-        const FOOD_FEATURE   = CELL_STATE_INDEX['food'];   // 1
-        const KILLER_FEATURE = CELL_STATE_INDEX['killer']; // 7
+        const preserve    = Math.min(old_size, new_size);
+        for (let i = 0; i < preserve; i++) new_weights[i] = old_weights[i];
+
+        // Initialise new connections with a diet-aware prior:
+        //   - Food type in diet  → +1.0  (chase)
+        //   - Food type not in diet → -0.2 (mild avoidance if organism has a diet, else noise)
+        //   - Killer             → -1.0  (flee)
+        //   - Everything else   → small gaussian noise
+        const dietSet = this._getDietSet();
+        const hasDiet = dietSet.size > 0;
+
         for (let i = preserve; i < new_size; i++) {
             const feature = Math.floor(i / new_n_outputs) % INPUTS_PER_EYE;
-            if (feature === FOOD_FEATURE)        new_weights[i] = 1.0;
-            else if (feature === KILLER_FEATURE) new_weights[i] = -1.0;
-            else                                 new_weights[i] = gaussRandom() * 0.1;
+            if (feature >= FEAT_FOOD_0 && feature <= FEAT_FOOD_3) {
+                const foodType = feature - FEAT_FOOD_0;
+                if (hasDiet) {
+                    new_weights[i] = dietSet.has(foodType) ? 1.0 : -0.2;
+                } else {
+                    new_weights[i] = gaussRandom() * 0.1;
+                }
+            } else if (feature === FEAT_KILLER) {
+                new_weights[i] = -1.0;
+            } else {
+                new_weights[i] = gaussRandom() * 0.1;
+            }
         }
-        this.weights = new_weights;
+
+        this.weights   = new_weights;
         this.obs_buffer = new Float32Array(this.n_inputs);
     }
 
@@ -76,22 +133,19 @@ class NNBrain extends Brain {
         const base = eye_index * INPUTS_PER_EYE;
         if (base + INPUTS_PER_EYE > this.n_inputs) return;
 
-        const state = (cell && cell.state) ? cell.state : CellStates.empty;
-        const one_hot_idx = CELL_STATE_INDEX[state.name] ?? 0;
-
-        for (let i = 0; i < N_CELL_TYPES; i++) {
-            this.obs_buffer[base + i] = (i === one_hot_idx) ? 1.0 : 0.0;
+        const feat = cellFeatureIndex(cell);
+        for (let i = 0; i < N_CELL_FEATURES; i++) {
+            this.obs_buffer[base + i] = (i === feat) ? 1.0 : 0.0;
         }
         const norm = Hyperparams.lookRange || 300;
-        this.obs_buffer[base + N_CELL_TYPES]     = Math.min(1.0, distance / norm);
-        this.obs_buffer[base + N_CELL_TYPES + 1] = (dx || 0) / norm;
-        this.obs_buffer[base + N_CELL_TYPES + 2] = (dy || 0) / norm;
+        this.obs_buffer[base + N_CELL_FEATURES]     = Math.min(1.0, distance / norm);
+        this.obs_buffer[base + N_CELL_FEATURES + 1] = (dx || 0) / norm;
+        this.obs_buffer[base + N_CELL_FEATURES + 2] = (dy || 0) / norm;
     }
 
     decide() {
         const thrusts = new Float32Array(this.n_outputs);
         if (this.n_inputs > 0 && this.n_outputs > 0) {
-            // forward pass: thrusts[j] = tanh(Σ_i weights[i * n_outputs + j] * obs[i])
             for (let j = 0; j < this.n_outputs; j++) {
                 let sum = 0;
                 for (let i = 0; i < this.n_inputs; i++) {
@@ -108,10 +162,9 @@ class NNBrain extends Brain {
         const strength = Hyperparams.nnMutationStrength || 0.05;
         for (let i = 0; i < this.weights.length; i++) {
             this.weights[i] += gaussRandom() * strength;
-            if (this.weights[i] > 3) this.weights[i] = 3;
+            if (this.weights[i] > 3)  this.weights[i] = 3;
             else if (this.weights[i] < -3) this.weights[i] = -3;
         }
-        // mover direction mutates with low probability
         for (const cell of this.owner.anatomy.cells) {
             if (cell.state === CellStates.mover && Math.random() < 0.1) {
                 cell.direction = (cell.direction + (Math.random() < 0.5 ? 1 : 3)) % 4;
@@ -120,12 +173,11 @@ class NNBrain extends Brain {
     }
 
     copy(other) {
-        // other may be an NNBrain instance (from inheritance) or a raw serialized object (from loadRaw)
         if (other instanceof NNBrain) {
-            this.n_inputs = other.n_inputs;
-            this.n_outputs = other.n_outputs;
-            this.weights = new Float32Array(other.weights);
-            this.obs_buffer = new Float32Array(this.n_inputs);
+            this.n_inputs       = other.n_inputs;
+            this.n_outputs      = other.n_outputs;
+            this.weights        = new Float32Array(other.weights);
+            this.obs_buffer     = new Float32Array(this.n_inputs);
             this.eye_cell_count = other.eye_cell_count;
         } else {
             this.loadRaw(other);
@@ -135,21 +187,20 @@ class NNBrain extends Brain {
     serialize() {
         return {
             type: 'nn',
-            weights: Array.from(this.weights),
-            n_inputs: this.n_inputs,
+            weights:   Array.from(this.weights),
+            n_inputs:  this.n_inputs,
             n_outputs: this.n_outputs
         };
     }
 
     loadRaw(raw) {
         if (!raw || raw.type !== 'nn') {
-            // unrecognised (e.g. old FSM save) — rebuild from anatomy
             this.buildSubstrate();
             return;
         }
-        this.n_inputs = raw.n_inputs || 0;
+        this.n_inputs  = raw.n_inputs  || 0;
         this.n_outputs = raw.n_outputs || 0;
-        this.weights = new Float32Array(raw.weights || []);
+        this.weights   = new Float32Array(raw.weights || []);
         this.obs_buffer = new Float32Array(this.n_inputs);
     }
 
@@ -161,19 +212,23 @@ class NNBrain extends Brain {
 
     checkRemovedCell(cell) {
         if (cell.state === CellStates.eye || cell.state === CellStates.mover) {
-            this.buildSubstrate();
+            this.buildSubstrate(cell); // pass cell so it is excluded from count before splice
         }
     }
 
-    size() {
-        return this.weights.length;
+    // Called when a mouth cell's diet changes so the prior is refreshed
+    // on any unlearned (zero-initialised) connections.
+    onDietChanged() {
+        this.buildSubstrate();
     }
 
-    // --- FSM editor compatibility stubs (prevent EditorController crashes) ---
+    size() { return this.weights.length; }
+
+    // --- FSM editor compatibility stubs ---
     get num_states() { return 0; }
-    get state() { return 0; }
+    get state()      { return 0; }
     get independent_eye_decisions() { return false; }
-    get decisions() { return []; }
+    get decisions()  { return []; }
     countCells() {
         this.eye_cell_count = 0;
         for (const c of this.owner.anatomy.cells) {
@@ -183,14 +238,24 @@ class NNBrain extends Brain {
     setIndependentEyeDecisions() {}
     newBrainState() {}
     removeBrainState() {}
+
     randomizeDecisions() {
-        const FOOD_FEATURE   = CELL_STATE_INDEX['food'];
-        const KILLER_FEATURE = CELL_STATE_INDEX['killer'];
+        const dietSet = this._getDietSet();
+        const hasDiet = dietSet.size > 0;
         for (let i = 0; i < this.weights.length; i++) {
             const feature = Math.floor(i / this.n_outputs) % INPUTS_PER_EYE;
-            if (feature === FOOD_FEATURE)        this.weights[i] = 1.0  + gaussRandom() * 0.2;
-            else if (feature === KILLER_FEATURE) this.weights[i] = -1.0 + gaussRandom() * 0.2;
-            else                                 this.weights[i] = gaussRandom() * 0.2;
+            if (feature >= FEAT_FOOD_0 && feature <= FEAT_FOOD_3) {
+                const foodType = feature - FEAT_FOOD_0;
+                if (hasDiet) {
+                    this.weights[i] = dietSet.has(foodType) ? 1.0 + gaussRandom() * 0.2 : -0.2 + gaussRandom() * 0.1;
+                } else {
+                    this.weights[i] = gaussRandom() * 0.2;
+                }
+            } else if (feature === FEAT_KILLER) {
+                this.weights[i] = -1.0 + gaussRandom() * 0.2;
+            } else {
+                this.weights[i] = gaussRandom() * 0.2;
+            }
         }
     }
 }

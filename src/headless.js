@@ -190,6 +190,33 @@ console.log(
 
 FossilRecord.updateData();
 
+// Build a per-organism record of the survivors at end-of-run.
+// This is the "evolved" brain — after living, eating, and reproducing — so it's
+// the right thing to promote into the next iteration's starting weights.
+function anatomySignature(org) {
+    return org.anatomy.cells
+        .map(c => `${c.loc_col},${c.loc_row}:${c.state.name}${typeof c.diet === 'number' ? '/d' + c.diet : ''}${typeof c.direction === 'number' ? '/r' + c.direction : ''}`)
+        .sort()
+        .join('|');
+}
+
+const livingRanked = env.organisms.map(org => ({
+    species:        org.species ? org.species.name : null,
+    species_cum_pop: org.species ? org.species.cumulative_pop : 0,
+    lifetime:       org.lifetime,
+    food_collected: org.food_collected,
+    fitness:        org.lifetime > 0 ? org.food_collected / org.lifetime : 0,
+    anatomy_sig:    anatomySignature(org),
+    anatomy:        org.anatomy.serialize(),
+    brain:          org.brain && org.brain.serialize ? org.brain.serialize() : null,
+}))
+.filter(o => o.brain)
+.sort((a, b) =>
+    (b.species_cum_pop - a.species_cum_pop) ||
+    (b.fitness         - a.fitness)         ||
+    (b.lifetime        - a.lifetime)
+);
+
 const results = {
     total_ticks:       env.total_ticks,
     elapsed_seconds:   parseFloat(wall_elapsed),
@@ -202,6 +229,8 @@ const results = {
     grid_rows:         env.grid_map.rows,
     cell_size:         env.grid_map.cell_size,
     fossil_record:     FossilRecord.serialize(),
+    founder_brains_ranked:    FossilRecord.exportFounderBrainsRanked(),
+    living_organisms_ranked:  livingRanked,
 };
 
 fs.writeFileSync(OUTPUT, JSON.stringify(results, null, 2));

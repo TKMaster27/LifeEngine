@@ -52,6 +52,7 @@ class EditorController extends CanvasController{
                 var loc_cell = this.getCurLocalCell();
                 if (loc_cell) {
                     loc_cell.diet = this.edit_diet;
+                    this.env.organism.brain.onDietChanged && this.env.organism.brain.onDietChanged();
                     this.env.renderFull();
                 }
             } else {
@@ -60,6 +61,7 @@ class EditorController extends CanvasController{
                     var loc_cell = this.getCurLocalCell();
                     if (loc_cell) {
                         loc_cell.diet = this.edit_diet;
+                        this.env.organism.brain.onDietChanged && this.env.organism.brain.onDietChanged();
                         this.env.renderFull();
                     }
                 }
@@ -467,8 +469,10 @@ class EditorController extends CanvasController{
         const n_weights = brain.weights.length;
 
         const FEATURE_NAMES = [
-            'empty','food','wall','mouth','producer','emitter',
-            'mover','killer','armor','eye','distance','dx','dy'
+            'empty','food0','food1','food2','food3',
+            'wall','mouth','producer','emitter',
+            'mover','killer','armor','eye',
+            'dist','dx','dy'
         ];
 
         brainInfo.html(`
