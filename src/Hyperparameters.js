@@ -36,6 +36,7 @@ const Hyperparams = {
         this.thrustDamping = 0.05;
         this.rotationalDamping = 0.1;
         this.nnMutationStrength = 0.1;
+        this.nnHiddenSize = 4;
 
         this.foodDropProb = 0;
         this.altFoodTypeChance = 0.0;

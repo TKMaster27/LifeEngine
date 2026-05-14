@@ -55,10 +55,14 @@ class NNBrain extends Brain {
     constructor(owner) {
         super();
         this.owner = owner;
-        this.weights = new Float32Array(0);
-        this.n_inputs = 0;
+        // Two-layer network: input → hidden → output
+        this.w1 = new Float32Array(0);   // n_inputs  × n_hidden
+        this.w2 = new Float32Array(0);   // n_hidden  × n_outputs
+        this.n_inputs  = 0;
+        this.n_hidden  = 0;
         this.n_outputs = 0;
-        this.obs_buffer = new Float32Array(0);
+        this.obs_buffer    = new Float32Array(0);
+        this.hidden_buffer = new Float32Array(0);
         this.eye_cell_count = 0;
         this.buildSubstrate();
     }
@@ -79,53 +83,92 @@ class NNBrain extends Brain {
         let n_movers = 0;
         for (const c of this.owner.anatomy.cells) {
             if (c === excludeCell) continue;
-            if (c.state === CellStates.eye)   n_eyes++;
+            if (c.state === CellStates.eye)        n_eyes++;
             else if (c.state === CellStates.mover) n_movers++;
         }
         this.eye_cell_count = n_eyes;
 
         const new_n_inputs  = n_eyes * INPUTS_PER_EYE;
         const new_n_outputs = n_movers;
+        // hidden layer is only meaningful when both inputs and outputs exist
+        const new_n_hidden  = (new_n_inputs > 0 && new_n_outputs > 0) ? (Hyperparams.nnHiddenSize || 4) : 0;
 
-        if (new_n_inputs === this.n_inputs && new_n_outputs === this.n_outputs) return;
+        const inputs_changed  = new_n_inputs  !== this.n_inputs;
+        const hidden_changed  = new_n_hidden  !== this.n_hidden;
+        const outputs_changed = new_n_outputs !== this.n_outputs;
 
-        const old_weights = this.weights;
-        const old_size    = this.n_inputs * this.n_outputs;
-        const new_size    = new_n_inputs  * new_n_outputs;
+        if (!inputs_changed && !hidden_changed && !outputs_changed) return;
 
-        this.n_inputs  = new_n_inputs;
-        this.n_outputs = new_n_outputs;
-
-        const new_weights = new Float32Array(new_size);
-        const preserve    = Math.min(old_size, new_size);
-        for (let i = 0; i < preserve; i++) new_weights[i] = old_weights[i];
-
-        // Initialise new connections with a diet-aware prior:
-        //   - Food type in diet  → +1.0  (chase)
-        //   - Food type not in diet → -0.2 (mild avoidance if organism has a diet, else noise)
-        //   - Killer             → -1.0  (flee)
-        //   - Everything else   → small gaussian noise
         const dietSet = this._getDietSet();
         const hasDiet = dietSet.size > 0;
 
-        for (let i = preserve; i < new_size; i++) {
-            const feature = Math.floor(i / new_n_outputs) % INPUTS_PER_EYE;
-            if (feature >= FEAT_FOOD_0 && feature <= FEAT_FOOD_3) {
-                const foodType = feature - FEAT_FOOD_0;
-                if (hasDiet) {
-                    new_weights[i] = dietSet.has(foodType) ? 1.0 : -0.2;
-                } else {
-                    new_weights[i] = gaussRandom() * 0.1;
+        // ── resize w1 (n_inputs × n_hidden) ──────────────────────────────────
+        if (inputs_changed || hidden_changed) {
+            const old_w1  = this.w1;
+            const old_ni  = this.n_inputs;
+            const old_nh  = this.n_hidden;
+            const new_w1  = new Float32Array(new_n_inputs * new_n_hidden);
+            const min_ni  = Math.min(old_ni, new_n_inputs);
+            const min_nh  = Math.min(old_nh, new_n_hidden);
+
+            // preserve the overlapping weight block from the old matrix
+            for (let i = 0; i < min_ni; i++) {
+                for (let h = 0; h < min_nh; h++) {
+                    new_w1[i * new_n_hidden + h] = old_w1[i * old_nh + h];
                 }
-            } else if (feature === FEAT_KILLER) {
-                new_weights[i] = -1.0;
-            } else {
-                new_weights[i] = gaussRandom() * 0.1;
             }
+
+            // initialise new connections with diet-aware prior
+            for (let i = 0; i < new_n_inputs; i++) {
+                for (let h = 0; h < new_n_hidden; h++) {
+                    if (i < min_ni && h < min_nh) continue; // already copied
+                    const feature = i % INPUTS_PER_EYE;
+                    if (feature >= FEAT_FOOD_0 && feature <= FEAT_FOOD_3) {
+                        const foodType = feature - FEAT_FOOD_0;
+                        new_w1[i * new_n_hidden + h] = hasDiet
+                            ? (dietSet.has(foodType) ? 1.0 : -0.2)
+                            : gaussRandom() * 0.1;
+                    } else if (feature === FEAT_KILLER) {
+                        new_w1[i * new_n_hidden + h] = -1.0;
+                    } else {
+                        new_w1[i * new_n_hidden + h] = gaussRandom() * 0.1;
+                    }
+                }
+            }
+            this.w1 = new_w1;
         }
 
-        this.weights   = new_weights;
-        this.obs_buffer = new Float32Array(this.n_inputs);
+        // ── resize w2 (n_hidden × n_outputs) ─────────────────────────────────
+        if (hidden_changed || outputs_changed) {
+            const old_w2  = this.w2;
+            const old_nh  = this.n_hidden;
+            const old_no  = this.n_outputs;
+            const new_w2  = new Float32Array(new_n_hidden * new_n_outputs);
+            const min_nh  = Math.min(old_nh, new_n_hidden);
+            const min_no  = Math.min(old_no, new_n_outputs);
+
+            for (let h = 0; h < min_nh; h++) {
+                for (let j = 0; j < min_no; j++) {
+                    new_w2[h * new_n_outputs + j] = old_w2[h * old_no + j];
+                }
+            }
+
+            // new hidden→output connections: small positive bias so food-chasing
+            // hidden activations immediately translate to forward thrust
+            for (let h = 0; h < new_n_hidden; h++) {
+                for (let j = 0; j < new_n_outputs; j++) {
+                    if (h < min_nh && j < min_no) continue;
+                    new_w2[h * new_n_outputs + j] = gaussRandom() * 0.1 + 0.5;
+                }
+            }
+            this.w2 = new_w2;
+        }
+
+        this.n_inputs      = new_n_inputs;
+        this.n_hidden      = new_n_hidden;
+        this.n_outputs     = new_n_outputs;
+        this.obs_buffer    = new Float32Array(new_n_inputs);
+        this.hidden_buffer = new Float32Array(new_n_hidden);
     }
 
     observe(cell, distance, direction, eye_index, dx, dy) {
@@ -145,11 +188,20 @@ class NNBrain extends Brain {
 
     decide() {
         const thrusts = new Float32Array(this.n_outputs);
-        if (this.n_inputs > 0 && this.n_outputs > 0) {
-            for (let j = 0; j < this.n_outputs; j++) {
+        if (this.n_inputs > 0 && this.n_hidden > 0 && this.n_outputs > 0) {
+            // hidden = tanh(w1 @ obs)
+            for (let h = 0; h < this.n_hidden; h++) {
                 let sum = 0;
                 for (let i = 0; i < this.n_inputs; i++) {
-                    sum += this.weights[i * this.n_outputs + j] * this.obs_buffer[i];
+                    sum += this.w1[i * this.n_hidden + h] * this.obs_buffer[i];
+                }
+                this.hidden_buffer[h] = Math.tanh(sum);
+            }
+            // output = tanh(w2 @ hidden)
+            for (let j = 0; j < this.n_outputs; j++) {
+                let sum = 0;
+                for (let h = 0; h < this.n_hidden; h++) {
+                    sum += this.w2[h * this.n_outputs + j] * this.hidden_buffer[h];
                 }
                 thrusts[j] = Math.tanh(sum);
             }
@@ -160,10 +212,15 @@ class NNBrain extends Brain {
 
     mutate() {
         const strength = Hyperparams.nnMutationStrength || 0.05;
-        for (let i = 0; i < this.weights.length; i++) {
-            this.weights[i] += gaussRandom() * strength;
-            if (this.weights[i] > 3)  this.weights[i] = 3;
-            else if (this.weights[i] < -3) this.weights[i] = -3;
+        for (let i = 0; i < this.w1.length; i++) {
+            this.w1[i] += gaussRandom() * strength;
+            if (this.w1[i] > 3)       this.w1[i] = 3;
+            else if (this.w1[i] < -3) this.w1[i] = -3;
+        }
+        for (let i = 0; i < this.w2.length; i++) {
+            this.w2[i] += gaussRandom() * strength;
+            if (this.w2[i] > 3)       this.w2[i] = 3;
+            else if (this.w2[i] < -3) this.w2[i] = -3;
         }
         for (const cell of this.owner.anatomy.cells) {
             if (cell.state === CellStates.mover && Math.random() < 0.1) {
@@ -174,10 +231,13 @@ class NNBrain extends Brain {
 
     copy(other) {
         if (other instanceof NNBrain) {
-            this.n_inputs       = other.n_inputs;
-            this.n_outputs      = other.n_outputs;
-            this.weights        = new Float32Array(other.weights);
-            this.obs_buffer     = new Float32Array(this.n_inputs);
+            this.n_inputs      = other.n_inputs;
+            this.n_hidden      = other.n_hidden;
+            this.n_outputs     = other.n_outputs;
+            this.w1            = new Float32Array(other.w1);
+            this.w2            = new Float32Array(other.w2);
+            this.hidden_buffer = new Float32Array(this.n_hidden);
+            this.obs_buffer    = new Float32Array(this.n_inputs);
             this.eye_cell_count = other.eye_cell_count;
         } else {
             this.loadRaw(other);
@@ -186,10 +246,12 @@ class NNBrain extends Brain {
 
     serialize() {
         return {
-            type: 'nn',
-            weights:   Array.from(this.weights),
+            type:      'nn',
             n_inputs:  this.n_inputs,
-            n_outputs: this.n_outputs
+            n_hidden:  this.n_hidden,
+            n_outputs: this.n_outputs,
+            w1:        Array.from(this.w1),
+            w2:        Array.from(this.w2),
         };
     }
 
@@ -198,10 +260,19 @@ class NNBrain extends Brain {
             this.buildSubstrate();
             return;
         }
-        this.n_inputs  = raw.n_inputs  || 0;
-        this.n_outputs = raw.n_outputs || 0;
-        this.weights   = new Float32Array(raw.weights || []);
-        this.obs_buffer = new Float32Array(this.n_inputs);
+        if (raw.w1 !== undefined) {
+            // current two-layer format
+            this.n_inputs      = raw.n_inputs  || 0;
+            this.n_hidden      = raw.n_hidden  || 0;
+            this.n_outputs     = raw.n_outputs || 0;
+            this.w1            = new Float32Array(raw.w1 || []);
+            this.w2            = new Float32Array(raw.w2 || []);
+            this.hidden_buffer = new Float32Array(this.n_hidden);
+            this.obs_buffer    = new Float32Array(this.n_inputs);
+        } else {
+            // old single-matrix format — rebuild with current Hyperparams.nnHiddenSize
+            this.buildSubstrate();
+        }
     }
 
     checkAddedCell(cell) {
@@ -222,7 +293,7 @@ class NNBrain extends Brain {
         this.buildSubstrate();
     }
 
-    size() { return this.weights.length; }
+    size() { return this.w1.length + this.w2.length; }
 
     // --- FSM editor compatibility stubs ---
     get num_states() { return 0; }
@@ -242,20 +313,23 @@ class NNBrain extends Brain {
     randomizeDecisions() {
         const dietSet = this._getDietSet();
         const hasDiet = dietSet.size > 0;
-        for (let i = 0; i < this.weights.length; i++) {
-            const feature = Math.floor(i / this.n_outputs) % INPUTS_PER_EYE;
+        for (let i = 0; i < this.w1.length; i++) {
+            const feature = Math.floor(i / (this.n_hidden || 1)) % INPUTS_PER_EYE;
             if (feature >= FEAT_FOOD_0 && feature <= FEAT_FOOD_3) {
                 const foodType = feature - FEAT_FOOD_0;
                 if (hasDiet) {
-                    this.weights[i] = dietSet.has(foodType) ? 1.0 + gaussRandom() * 0.2 : -0.2 + gaussRandom() * 0.1;
+                    this.w1[i] = dietSet.has(foodType) ? 1.0 + gaussRandom() * 0.2 : -0.2 + gaussRandom() * 0.1;
                 } else {
-                    this.weights[i] = gaussRandom() * 0.2;
+                    this.w1[i] = gaussRandom() * 0.2;
                 }
             } else if (feature === FEAT_KILLER) {
-                this.weights[i] = -1.0 + gaussRandom() * 0.2;
+                this.w1[i] = -1.0 + gaussRandom() * 0.2;
             } else {
-                this.weights[i] = gaussRandom() * 0.2;
+                this.w1[i] = gaussRandom() * 0.2;
             }
+        }
+        for (let i = 0; i < this.w2.length; i++) {
+            this.w2[i] = gaussRandom() * 0.2 + 0.5;
         }
     }
 }

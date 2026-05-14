@@ -464,9 +464,10 @@ class EditorController extends CanvasController{
         brainMaps.empty();
         $('#brain-editor-controls').remove();
 
-        const n_eyes = brain.eye_cell_count;
+        const n_eyes   = brain.eye_cell_count;
+        const n_hidden = brain.n_hidden;
         const n_movers = brain.n_outputs;
-        const n_weights = brain.weights.length;
+        const n_weights = brain.w1.length + brain.w2.length;
 
         const FEATURE_NAMES = [
             'empty','food0','food1','food2','food3',
@@ -477,45 +478,63 @@ class EditorController extends CanvasController{
 
         brainInfo.html(`
             <h2>Neural Brain</h2>
-            <p style="margin:2px 0">Eyes: ${n_eyes} &nbsp; Movers: ${n_movers} &nbsp; Weights: ${n_weights}</p>
-            <p style="margin:2px 0;font-size:11px;color:#aaa">Rows = eye inputs (eye × feature), Cols = mover outputs</p>
+            <p style="margin:2px 0">Eyes: ${n_eyes} &nbsp; Hidden: ${n_hidden} &nbsp; Movers: ${n_movers} &nbsp; Weights: ${n_weights}</p>
+            <p style="margin:2px 0;font-size:11px;color:#aaa">W1: inputs→hidden &nbsp;|&nbsp; W2: hidden→outputs</p>
         `);
 
-        if (n_eyes === 0 || n_movers === 0) {
+        if (n_eyes === 0 || n_movers === 0 || n_hidden === 0) {
             brainMaps.html('<p>No weights yet.</p>');
             this.updateBrainSummary();
             return;
         }
 
-        // build weight heatmap table
-        let header = '<tr><th style="font-size:10px;padding:1px 3px">Input \\ Mover</th>';
-        for (let j = 0; j < n_movers; j++) {
-            header += `<th style="font-size:10px;padding:1px 3px">M${j}</th>`;
+        function weightCell(w) {
+            const mag = Math.min(1, Math.abs(w) / 2);
+            const r = w < 0 ? Math.round(180 * mag) : 0;
+            const g = w > 0 ? Math.round(180 * mag) : 0;
+            return `<td title="${w.toFixed(3)}" style="background:rgb(${r},${g},0);width:18px;height:14px;font-size:9px;text-align:center;color:#eee">${w.toFixed(1)}</td>`;
         }
-        header += '</tr>';
 
-        let rows = '';
+        // W1 table: rows = inputs (eye × feature), cols = hidden neurons
+        let w1Header = '<tr><th style="font-size:10px;padding:1px 3px">In \\ H</th>';
+        for (let h = 0; h < n_hidden; h++) w1Header += `<th style="font-size:10px;padding:1px 3px">H${h}</th>`;
+        w1Header += '</tr>';
+
+        let w1Rows = '';
         for (let e = 0; e < n_eyes; e++) {
             for (let f = 0; f < FEATURE_NAMES.length; f++) {
                 const i = e * FEATURE_NAMES.length + f;
                 if (i >= brain.n_inputs) break;
                 const label = n_eyes > 1 ? `E${e}·${FEATURE_NAMES[f]}` : FEATURE_NAMES[f];
-                rows += `<tr><td style="font-size:10px;padding:1px 3px;white-space:nowrap">${label}</td>`;
-                for (let j = 0; j < n_movers; j++) {
-                    const w = brain.weights[i * n_movers + j];
-                    const mag = Math.min(1, Math.abs(w) / 2);
-                    const r = w < 0 ? Math.round(180 * mag) : 0;
-                    const g = w > 0 ? Math.round(180 * mag) : 0;
-                    const bg = `rgb(${r},${g},0)`;
-                    rows += `<td title="${w.toFixed(3)}" style="background:${bg};width:18px;height:14px;font-size:9px;text-align:center;color:#eee">${w.toFixed(1)}</td>`;
+                w1Rows += `<tr><td style="font-size:10px;padding:1px 3px;white-space:nowrap">${label}</td>`;
+                for (let h = 0; h < n_hidden; h++) {
+                    w1Rows += weightCell(brain.w1[i * n_hidden + h]);
                 }
-                rows += '</tr>';
+                w1Rows += '</tr>';
             }
         }
 
+        // W2 table: rows = hidden neurons, cols = movers
+        let w2Header = '<tr><th style="font-size:10px;padding:1px 3px">H \\ Out</th>';
+        for (let j = 0; j < n_movers; j++) w2Header += `<th style="font-size:10px;padding:1px 3px">M${j}</th>`;
+        w2Header += '</tr>';
+
+        let w2Rows = '';
+        for (let h = 0; h < n_hidden; h++) {
+            w2Rows += `<tr><td style="font-size:10px;padding:1px 3px">H${h}</td>`;
+            for (let j = 0; j < n_movers; j++) {
+                w2Rows += weightCell(brain.w2[h * n_movers + j]);
+            }
+            w2Rows += '</tr>';
+        }
+
+        const tableStyle = 'border-collapse:collapse;font-family:monospace';
         brainMaps.html(`
-            <div style="overflow:auto;max-height:260px;margin-top:4px">
-                <table style="border-collapse:collapse;font-family:monospace">${header}${rows}</table>
+            <div style="overflow:auto;max-height:320px;margin-top:4px">
+                <p style="margin:2px 0 1px;font-size:11px;font-weight:bold;color:#ccc">W1 — input → hidden</p>
+                <table style="${tableStyle}">${w1Header}${w1Rows}</table>
+                <p style="margin:6px 0 1px;font-size:11px;font-weight:bold;color:#ccc">W2 — hidden → output</p>
+                <table style="${tableStyle}">${w2Header}${w2Rows}</table>
             </div>
         `);
 

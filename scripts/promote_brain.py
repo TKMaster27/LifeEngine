@@ -92,8 +92,16 @@ def main():
 
     # ── sanity-check brain shape ───────────────────────────────────────────
     cur_brain = exp_org.get('brain', {})
-    if cur_brain.get('n_inputs') != winner_brain['n_inputs'] or cur_brain.get('n_outputs') != winner_brain['n_outputs']:
-        print(f'[promote] Brain shape changing: {cur_brain.get("n_inputs")}→{winner_brain["n_inputs"]} inputs,  {cur_brain.get("n_outputs")}→{winner_brain["n_outputs"]} outputs')
+    shape_ok = (
+        cur_brain.get('n_inputs')  == winner_brain['n_inputs']  and
+        cur_brain.get('n_hidden')  == winner_brain.get('n_hidden') and
+        cur_brain.get('n_outputs') == winner_brain['n_outputs']
+    )
+    if not shape_ok:
+        print(f'[promote] Brain shape changing: '
+              f'{cur_brain.get("n_inputs")}→{winner_brain["n_inputs"]} inputs, '
+              f'{cur_brain.get("n_hidden")}→{winner_brain.get("n_hidden")} hidden, '
+              f'{cur_brain.get("n_outputs")}→{winner_brain["n_outputs"]} outputs')
 
     # ── apply ───────────────────────────────────────────────────────────────
     exp_org['brain'] = winner_brain
@@ -101,17 +109,24 @@ def main():
     # also update the founder_brain in fossil_record so loads stay consistent
     species_block = experiment.get('fossil_record', {}).get('species', {})
     if species_block:
-        # baseline has a single species — update it
         for name in species_block:
             species_block[name]['founder_brain'] = winner_brain
 
-    print('[promote] Brain weights summary (first 5):', [round(w, 3) for w in winner_brain['weights'][:5]])
-    food1_idx = 2 # food_1 feature index for the default 16-input layout
+    # print summary using new two-layer format (w1/w2)
+    w1 = winner_brain.get('w1') or winner_brain.get('weights') or []
+    n_hidden = winner_brain.get('n_hidden', 0)
+    n_out    = winner_brain['n_outputs']
+    print('[promote] w1 first 5:', [round(w, 3) for w in w1[:5]])
+    food1_idx = 2  # food_1 feature index in 16-input layout
     killer_idx = 10
-    n_out = winner_brain['n_outputs']
-    if winner_brain['n_inputs'] >= 16 and n_out >= 1:
-        print(f'[promote] food_1 weight per mover: {[round(winner_brain["weights"][food1_idx*n_out + j], 3) for j in range(n_out)]}')
-        print(f'[promote] killer weight per mover: {[round(winner_brain["weights"][killer_idx*n_out + j], 3) for j in range(n_out)]}')
+    if winner_brain['n_inputs'] >= 16 and n_hidden >= 1:
+        food1_w1  = [round(w1[food1_idx  * n_hidden + h], 3) for h in range(n_hidden)]
+        killer_w1 = [round(w1[killer_idx * n_hidden + h], 3) for h in range(n_hidden)]
+        print(f'[promote] w1 food_1 row (per hidden): {food1_w1}')
+        print(f'[promote] w1 killer row (per hidden): {killer_w1}')
+        w2 = winner_brain.get('w2', [])
+        if w2:
+            print(f'[promote] w2 (hidden→output):        {[round(v, 3) for v in w2]}')
 
     if args.dry_run:
         print('[promote] --dry-run; no file written.')
