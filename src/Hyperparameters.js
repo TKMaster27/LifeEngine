@@ -2,7 +2,7 @@ const Neighbors = require("./Grid/Neighbors");
 
 const Hyperparams = {
     setDefaults: function() {
-        this.lifespanMultiplier = 1000;
+        this.lifespanMultiplier = 500;
         this.foodProdProb = 3;
         this.emitterProdProb = 5;
         // Emitter generation controls (used by EnvironmentController.randomizeEmitters)
@@ -32,6 +32,10 @@ const Hyperparams = {
         this.lookRange = 300;
         this.seeThroughSelf = false;
         this.evolveIndependentEyeDecisions = true;
+
+        this.thrustDamping = 0.05;
+        this.rotationalDamping = 0.1;
+        this.nnMutationStrength = 0.1;
 
         this.foodDropProb = 0;
         this.altFoodTypeChance = 0.0;

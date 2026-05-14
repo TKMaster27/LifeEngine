@@ -1,0 +1,308 @@
+const Hyperparams = require("../../Hyperparameters");
+const CellStates = require("../Cell/CellStates");
+const Brain = require("./Brain");
+
+const Decision = {
+    neutral: 0,
+    retreat: 1,
+    chase: 2,
+    move_left: 3,
+    move_right: 4,
+    stop: 5,
+    turn_left: 6,
+    turn_right: 7,
+    getRandom: function() {
+        const range = Hyperparams.rotationEnabled ? 8 : 6
+        return Math.floor(Math.random() * range);
+    }
+}
+
+// the brain takes eye observations in -> movement decision out
+// it operates as a state machine (the brain state), and has independent logic for each eye
+// each eye has a list of decision maps, one for each brain state
+// each decision map is a map from (observed cell state) -> (movement decision, next brain state)
+// (action,next_state) = decisions[eye_index][state_index][observed_cell]
+// the nearest eye's observations is the one that determines the action
+
+class FSMBrain extends Brain {
+    constructor(owner) {
+        super();
+        this.owner = owner;
+        this.num_states = 1;
+        this.state = 0;
+        this.closest_distance = Hyperparams.lookRange + 1;
+        this.best_observation = null;
+        this.winning_eye_index = 0;
+        this.decisions = [[ this.newDecisionMap() ]];
+        this.eye_cell_count = 0;
+        this.independent_eye_decisions = false;
+    }
+
+    checkAddedCell(cell) {
+        if (cell.state.name == CellStates.eye.name) {
+            this.fillEyeDecisions();
+            this.eye_cell_count++;
+        }
+    }
+
+    checkRemovedCell(cell) {
+        if (cell.state.name === CellStates.eye.name) {
+            if (this.independent_eye_decisions && this.decisions.length > 1) {
+                let eye_index = -1;
+                for (let c of this.owner.anatomy.cells) {
+                    if (c.state.name == CellStates.eye.name) {
+                        eye_index++;
+                    }
+                    if (c === cell) {
+                        break;
+                    }
+                }
+                if (eye_index != -1 && this.decisions.length > 1) {
+                    this.decisions.splice(eye_index, 1);
+                }
+            }
+            this.eye_cell_count--;
+        }
+    }
+
+    countCells() {
+        this.eye_cell_count = 0;
+        for (let cell of this.owner.anatomy.cells) {
+            if (cell.state.name == CellStates.eye.name) {
+                this.eye_cell_count++;
+            }
+        }
+    }
+
+    fillEyeDecisions() {
+        if (!this.independent_eye_decisions) {
+            return;
+        }
+        let last_eye_copy = null;
+        if (this.decisions.length > 0) {
+            last_eye_copy = deepCopy(this.decisions[this.decisions.length - 1]);
+        }
+        this.countCells();
+        while (this.decisions.length < this.eye_cell_count) {
+            if (!last_eye_copy) {
+                const eyeStates = [];
+                for(let s=0;s<this.num_states;s++) eyeStates.push(this.newDecisionMap());
+                this.decisions.push(eyeStates);
+                last_eye_copy = deepCopy(eyeStates);
+            } else {
+                this.decisions.push(last_eye_copy);
+            }
+        }
+    }
+
+    setIndependentEyeDecisions(val) {
+        if (this.independent_eye_decisions === val) {
+            return;
+        }
+        this.independent_eye_decisions = val;
+        if (!val) {
+            this.decisions = [this.decisions[0]];
+        } else {
+            this.fillEyeDecisions();
+        }
+    }
+
+    newBrainState(randomize_connections=true) {
+        if (this.num_states >= 10) {
+            return;
+        }
+        this.num_states++;
+        for (let eye of this.decisions) {
+            const last_state = eye[eye.length - 1];
+            if (last_state) {
+                const last_state_copy = deepCopy(last_state);
+                eye.push(last_state_copy);
+            } else {
+                eye.push(this.newDecisionMap());
+            }
+        }
+        if (!randomize_connections)
+            return;
+        const numMut = Math.max(1, Math.floor(Math.random() * this.decisions.length * this.num_states * 2));
+        for (let i = 0; i < numMut; i++) {
+            const eyeIdx = Math.floor(Math.random() * this.decisions.length);
+            const fromState = Math.floor(Math.random() * (this.num_states - 1));
+            const toState = this.num_states - 1;
+            const cellType = CellStates.getRandomName();
+            this.decisions[eyeIdx][fromState][cellType].state = toState;
+        }
+    }
+
+    removeBrainState(index=-1) {
+        if (index === -1) {
+            index = this.num_states - 1;
+        }
+        if (this.num_states <= 1) {
+            return;
+        }
+        const new_num_states = this.num_states - 1;
+        for (let eye of this.decisions) {
+            for (let i=0;i<eye.length;i++) {
+                if (i === index) {
+                    continue;
+                }
+                const state = eye[i];
+                for (let cell of CellStates.all) {
+                    if (state[cell.name].state === index) {
+                        state[cell.name].state = Math.floor(Math.random() * new_num_states);
+                    }
+                    if (state[cell.name].state > index) {
+                        state[cell.name].state--;
+                    }
+                }
+            }
+            eye.splice(index, 1);
+        }
+        this.num_states = new_num_states;
+        if (this.state >= this.num_states) {
+            this.state = this.num_states - 1;
+            if (this.state < 0) this.state = 0;
+        }
+    }
+
+    canEatFoodType(foodType) {
+        for (let cell of this.owner.anatomy.cells) {
+            if (cell.state === CellStates.mouth && cell.diet === foodType) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    newDecisionMap(default_decision=null) {
+        const decisions = {};
+        for (let cell of CellStates.all) {
+            decisions[cell.name] = {
+                decision: default_decision || Decision.getRandom(),
+                state: Math.floor(Math.random() * this.num_states)
+            };
+        }
+        decisions[CellStates.food.name].decision = Decision.chase;
+        decisions[CellStates.killer.name].decision = Decision.retreat;
+        return decisions;
+    }
+
+    copy(brain) {
+        this.decisions = [];
+        if (Array.isArray(brain.decisions)) {
+            this.decisions = deepCopy(brain.decisions);
+            this.independent_eye_decisions = brain.independent_eye_decisions;
+            if (this.independent_eye_decisions) {
+                this.countCells();
+            }
+        } else if (brain.decisions && typeof brain.decisions === 'object') {
+            // legacy single-map structure
+            const decisions_copy = deepCopy(brain.decisions);
+            for (let cell of CellStates.all) {
+                decisions_copy[cell.name] = {
+                    decision: decisions_copy[cell.name],
+                    state: 0
+                };
+            }
+            this.decisions.push([decisions_copy]);
+            this.independent_eye_decisions = false;
+        }
+        if (this.decisions.length > 0) {
+            this.num_states = this.decisions[0].length;
+        }
+    }
+
+    randomizeDecisions() {
+        for (let eye of this.decisions) {
+            for (let state of eye) {
+                for (let cell of CellStates.all) {
+                    state[cell.name].decision = Decision.getRandom();
+                }
+            }
+        }
+    }
+
+    observe(cell, distance, direction, eye_index) {
+        if (cell !== null && cell.owner !== this.owner && distance < this.closest_distance) {
+            this.closest_distance = distance;
+            this.best_observation = { cell, direction };
+            this.winning_eye_index = eye_index;
+        }
+    }
+
+    decide() {
+        let decision = {
+            decision: Decision.neutral,
+            state: 0
+        };
+        let move_direction = 0;
+
+        if (this.best_observation) {
+            let observedName = this.best_observation.cell.state.name;
+            let safe_eye_index = (this.winning_eye_index < this.decisions.length) ? this.winning_eye_index : 0;
+            decision = this.decisions[safe_eye_index][this.state][observedName];
+            move_direction = this.best_observation.direction;
+        }
+
+        this.closest_distance = Hyperparams.lookRange + 1;
+        this.best_observation = null;
+        this.winning_eye_index = 0;
+
+        this.state = decision.state;
+        return {decision: decision.decision, move_direction};
+    }
+
+    size() {
+        return this.decisions.length * this.num_states * CellStates.all.length;
+    }
+
+    mutate() {
+        if (Math.random() < 0.25) {
+            if (Math.random() < 0.5) {
+                this.newBrainState();
+            } else {
+                this.removeBrainState();
+            }
+        }
+        if (Hyperparams.evolveIndependentEyeDecisions && Math.random() < 0.25) {
+            this.setIndependentEyeDecisions(!this.independent_eye_decisions);
+        }
+
+        let num_mutations = Math.floor(Math.random() * this.size()/2);
+        for (let i = 0; i < num_mutations; i++) {
+            let eye_index = Math.floor(Math.random() * this.decisions.length);
+            let state_index = Math.floor(Math.random() * this.decisions[eye_index].length);
+            if (Math.random() < 0.5) {
+                this.decisions[eye_index][state_index][CellStates.getRandomName()].decision = Decision.getRandom();
+            }
+            else {
+                this.decisions[eye_index][state_index][CellStates.getRandomName()].state = Math.floor(Math.random() * this.num_states);
+            }
+        }
+    }
+
+    serialize() {
+        return {
+            decisions: this.decisions,
+            independent_eye_decisions: this.independent_eye_decisions,
+            state: this.state
+        };
+    }
+
+    loadRaw(raw) {
+        this.copy(raw);
+    }
+}
+
+function deepCopy(obj) {
+    if (Array.isArray(obj)) {
+        return obj.map(deepCopy);
+    } else if (typeof obj === 'object' && obj !== null) {
+        return Object.fromEntries(Object.entries(obj).map(([key, value]) => [key, deepCopy(value)]));
+    }
+    return obj;
+}
+
+FSMBrain.Decision = Decision;
+
+module.exports = FSMBrain;

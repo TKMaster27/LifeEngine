@@ -11,9 +11,8 @@ class EyeCell extends BodyCell{
     }
 
     initInherit(parent) {
-        // deep copy parent values
         super.initInherit(parent);
-        this.direction = parent.direction;
+        this.direction = (parent.direction !== undefined) ? parent.direction : Directions.up;
     }
     
     initRandom() {
@@ -62,12 +61,10 @@ class EyeCell extends BodyCell{
         var maxRow = map.rows;
 
         let my_eye_index = 0;
-        if (this.org.brain.independent_eye_decisions) {
-            for (let c of this.org.anatomy.cells) {
-                if (c.state.name === CellStates.eye.name) {
-                    if (c === this) break;
-                    my_eye_index++;
-                }
+        for (let c of this.org.anatomy.cells) {
+            if (c.state.name === CellStates.eye.name) {
+                if (c === this) break;
+                my_eye_index++;
             }
         }
 
@@ -87,12 +84,12 @@ class EyeCell extends BodyCell{
 
             if (cell.state !== CellStates.empty) {
                 var distance = Math.abs(start_col-col) + Math.abs(start_row-row);
-                this.org.brain.observe(cell, distance, direction, my_eye_index);
+                this.org.brain.observe(cell, distance, direction, my_eye_index, col - start_col, row - start_row);
                 return;
             }
         }
 
-        this.org.brain.observe(cell, Hyperparams.lookRange, direction, my_eye_index);
+        this.org.brain.observe(cell, Hyperparams.lookRange, direction, my_eye_index, 0, 0);
     }
 }
 

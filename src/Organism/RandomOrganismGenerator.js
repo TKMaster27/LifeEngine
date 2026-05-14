@@ -1,6 +1,6 @@
 const CellStates = require("./Cell/CellStates");
 const Organism = require("./Organism");
-const Brain = require("./Perception/Brain")
+const FSMBrain = require("./Perception/FSMBrain")
 
 class RandomOrganismGenerator {
 

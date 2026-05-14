@@ -4,13 +4,15 @@ const Directions = require("../Organism/Directions");
 const Hyperparams = require("../Hyperparameters");
 const Species = require("../Stats/Species");
 const LoadController = require("./LoadController");
-const Brain = require("../Organism/Perception/Brain");
+const FSMBrain = require("../Organism/Perception/FSMBrain");
+const NNBrain = require("../Organism/Perception/NNBrain");
 const FossilRecord = require("../Stats/FossilRecord");
 
 class EditorController extends CanvasController{
     constructor(env, canvas) {
         super(env, canvas);
         this.edit_cell_type = null;
+        this.edit_diet = 0;
         this.highlight_org = false;
         this.defineCellTypeSelection();
         this.defineEditorDetails();
@@ -46,9 +48,22 @@ class EditorController extends CanvasController{
                 var loc_cell = this.getCurLocalCell();
                 loc_cell.direction = Directions.rotateRight(loc_cell.direction);
                 this.env.renderFull();
-            }
-            else
+            } else if (this.edit_cell_type == CellStates.mouth && this.cur_cell.state == CellStates.mouth) {
+                var loc_cell = this.getCurLocalCell();
+                if (loc_cell) {
+                    loc_cell.diet = this.edit_diet;
+                    this.env.renderFull();
+                }
+            } else {
                 this.env.addCellToOrg(this.mouse_c, this.mouse_r, this.edit_cell_type);
+                if (this.edit_cell_type == CellStates.mouth) {
+                    var loc_cell = this.getCurLocalCell();
+                    if (loc_cell) {
+                        loc_cell.diet = this.edit_diet;
+                        this.env.renderFull();
+                    }
+                }
+            }
         }
         else if (this.right_click)
             this.env.removeCellFromOrg(this.mouse_c, this.mouse_r);
@@ -71,6 +86,9 @@ class EditorController extends CanvasController{
         }
         this.updateBrainInfo();
         this.updateBrainSummary();
+        if (this.env.organism.brain instanceof NNBrain) {
+            this.drawNNOverlay(this.env.organism);
+        }
     }
 
     updateBrainSummary() {
@@ -100,8 +118,12 @@ class EditorController extends CanvasController{
         var self = this;
         $('.cell-type').click( function() {
             switch(this.id){
-                case "mouth":
+                case "mouth-0":
+                case "mouth-1":
+                case "mouth-2":
+                case "mouth-3":
                     self.edit_cell_type = CellStates.mouth;
+                    self.edit_diet = parseInt(this.id.split('-')[1]);
                     break;
                 case "producer":
                     self.edit_cell_type = CellStates.producer;
@@ -119,9 +141,8 @@ class EditorController extends CanvasController{
                     self.edit_cell_type = CellStates.eye;
                     break;
             }
-            $(".cell-type" ).css( "border-color", "black" );
-            var selected = '#'+this.id+'.cell-type';
-            $(selected).css("border-color", "yellow");
+            $(".cell-type").css("border-color", "black");
+            $('#'+this.id+'.cell-type').css("border-color", "yellow");
         });
     }
 
@@ -210,6 +231,9 @@ class EditorController extends CanvasController{
         $('#cell-selections').css('display', 'grid');
         this.updateBrainInfo();
         $('#edit-organism-details').css('display', 'block');
+        if (this.env.organism.brain instanceof NNBrain) {
+            this.drawNNOverlay(this.env.organism);
+        }
     }
 
 
@@ -241,6 +265,11 @@ class EditorController extends CanvasController{
 
         if (!org.anatomy.has_eyes || !org.anatomy.is_mover) {
             brainInfo.html('<h2>Brain</h2><p>Add 1 eye and 1 mover to add a brain</p>');
+            return;
+        }
+
+        if (org.brain instanceof NNBrain) {
+            this.updateNNBrainPanel(org);
             return;
         }
 
@@ -410,9 +439,9 @@ class EditorController extends CanvasController{
 
     generateActionDropdown(eye, state, cell, selectedAction) {
         let options = '';
-        for (const action in Brain.Decision) {
-            if (typeof Brain.Decision[action] === 'number') {
-                options += `<option value="${Brain.Decision[action]}" ${selectedAction === Brain.Decision[action] ? 'selected' : ''}>${action}</option>`;
+        for (const action in FSMBrain.Decision) {
+            if (typeof FSMBrain.Decision[action] === 'number') {
+                options += `<option value="${FSMBrain.Decision[action]}" ${selectedAction === FSMBrain.Decision[action] ? 'selected' : ''}>${action}</option>`;
             }
         }
         return `<select class="action-select" data-eye="${eye}" data-state="${state}" data-cell="${cell}" data-type="decision">${options}</select>`;
@@ -424,6 +453,152 @@ class EditorController extends CanvasController{
             options += `<option value="${i}" ${selectedState === i ? 'selected' : ''}>${i}</option>`;
         }
         return `<select class="state-select" data-eye="${eye}" data-state="${state}" data-cell="${cell}" data-type="state">${options}</select>`;
+    }
+
+    updateNNBrainPanel(org) {
+        const brain = org.brain;
+        const brainInfo = $('#brain-info');
+        const brainMaps = $('#brain-maps');
+        brainMaps.empty();
+        $('#brain-editor-controls').remove();
+
+        const n_eyes = brain.eye_cell_count;
+        const n_movers = brain.n_outputs;
+        const n_weights = brain.weights.length;
+
+        const FEATURE_NAMES = [
+            'empty','food','wall','mouth','producer','emitter',
+            'mover','killer','armor','eye','distance','dx','dy'
+        ];
+
+        brainInfo.html(`
+            <h2>Neural Brain</h2>
+            <p style="margin:2px 0">Eyes: ${n_eyes} &nbsp; Movers: ${n_movers} &nbsp; Weights: ${n_weights}</p>
+            <p style="margin:2px 0;font-size:11px;color:#aaa">Rows = eye inputs (eye × feature), Cols = mover outputs</p>
+        `);
+
+        if (n_eyes === 0 || n_movers === 0) {
+            brainMaps.html('<p>No weights yet.</p>');
+            this.updateBrainSummary();
+            return;
+        }
+
+        // build weight heatmap table
+        let header = '<tr><th style="font-size:10px;padding:1px 3px">Input \\ Mover</th>';
+        for (let j = 0; j < n_movers; j++) {
+            header += `<th style="font-size:10px;padding:1px 3px">M${j}</th>`;
+        }
+        header += '</tr>';
+
+        let rows = '';
+        for (let e = 0; e < n_eyes; e++) {
+            for (let f = 0; f < FEATURE_NAMES.length; f++) {
+                const i = e * FEATURE_NAMES.length + f;
+                if (i >= brain.n_inputs) break;
+                const label = n_eyes > 1 ? `E${e}·${FEATURE_NAMES[f]}` : FEATURE_NAMES[f];
+                rows += `<tr><td style="font-size:10px;padding:1px 3px;white-space:nowrap">${label}</td>`;
+                for (let j = 0; j < n_movers; j++) {
+                    const w = brain.weights[i * n_movers + j];
+                    const mag = Math.min(1, Math.abs(w) / 2);
+                    const r = w < 0 ? Math.round(180 * mag) : 0;
+                    const g = w > 0 ? Math.round(180 * mag) : 0;
+                    const bg = `rgb(${r},${g},0)`;
+                    rows += `<td title="${w.toFixed(3)}" style="background:${bg};width:18px;height:14px;font-size:9px;text-align:center;color:#eee">${w.toFixed(1)}</td>`;
+                }
+                rows += '</tr>';
+            }
+        }
+
+        brainMaps.html(`
+            <div style="overflow:auto;max-height:260px;margin-top:4px">
+                <table style="border-collapse:collapse;font-family:monospace">${header}${rows}</table>
+            </div>
+        `);
+
+        this.updateBrainSummary();
+    }
+
+    drawNNOverlay(org) {
+        const renderer = this.env.renderer;
+        if (!renderer || !renderer.ctx) return;
+
+        // ensure cells are rendered before drawing on top
+        this.env.renderFull();
+
+        const ctx = renderer.ctx;
+        const cs = renderer.cell_size;
+        const half = cs / 2;
+
+        // collect eyes and movers from anatomy
+        const eyes = [];
+        const movers = [];
+        for (const c of org.anatomy.cells) {
+            if (c.state === CellStates.eye) eyes.push(c);
+            else if (c.state === CellStates.mover) movers.push(c);
+        }
+
+        if (eyes.length === 0 && movers.length === 0) return;
+
+        ctx.save();
+        try {
+            // draw eye rays
+            ctx.setLineDash([3, 3]);
+            ctx.strokeStyle = 'rgba(255,255,0,0.8)';
+            ctx.lineWidth = 1.5;
+            for (const eyeLocal of eyes) {
+                const realCell = org.getRealCell(eyeLocal);
+                if (!realCell || typeof eyeLocal.getAbsoluteDirection !== 'function') continue;
+                const sx = realCell.x + half;
+                const sy = realCell.y + half;
+                const absDir = eyeLocal.getAbsoluteDirection();
+                const vec = Directions.scalars[absDir];
+                if (!vec) continue;
+                const [dx, dy] = vec;
+                const rayLen = Math.min(Hyperparams.lookRange, 40) * cs;
+                ctx.beginPath();
+                ctx.moveTo(sx, sy);
+                ctx.lineTo(sx + dx * rayLen, sy + dy * rayLen);
+                ctx.stroke();
+            }
+
+            // draw mover direction arrows
+            ctx.setLineDash([]);
+            for (const moverLocal of movers) {
+                const realCell = org.getRealCell(moverLocal);
+                if (!realCell || typeof moverLocal.getAbsoluteDirection !== 'function') continue;
+                const cx = realCell.x + half;
+                const cy = realCell.y + half;
+                const absDir = moverLocal.getAbsoluteDirection();
+                const vec = Directions.scalars[absDir];
+                if (!vec) continue;
+                const [dx, dy] = vec;
+                const arrowLen = half * 1.6;
+                const ex = cx + dx * arrowLen;
+                const ey = cy + dy * arrowLen;
+
+                ctx.strokeStyle = 'rgba(0,220,255,0.9)';
+                ctx.fillStyle  = 'rgba(0,220,255,0.9)';
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.moveTo(cx, cy);
+                ctx.lineTo(ex, ey);
+                ctx.stroke();
+
+                // arrowhead
+                const headLen = Math.max(3, half * 0.5);
+                const angle = Math.atan2(ey - cy, ex - cx);
+                ctx.beginPath();
+                ctx.moveTo(ex, ey);
+                ctx.lineTo(ex - headLen * Math.cos(angle - 0.4), ey - headLen * Math.sin(angle - 0.4));
+                ctx.lineTo(ex - headLen * Math.cos(angle + 0.4), ey - headLen * Math.sin(angle + 0.4));
+                ctx.closePath();
+                ctx.fill();
+            }
+        } catch (e) {
+            console.error('drawNNOverlay error:', e);
+        } finally {
+            ctx.restore();
+        }
     }
 
     setRandomizePanel() {
