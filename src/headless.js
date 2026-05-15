@@ -140,6 +140,13 @@ if (LOAD) {
     }
     const raw = JSON.parse(fs.readFileSync(LOAD, 'utf8'));
     env.loadRaw(raw);
+    // Apply embedded controls unless a separate --config was already given.
+    // WorldEnvironment.loadRaw skips this behind a UI checkbox that is always
+    // false in headless, so we do it explicitly here.
+    if (!CONFIG && raw.controls) {
+        Hyperparams.loadJsonObj(raw.controls);
+        console.log(`[headless] Controls loaded from ${LOAD}`);
+    }
     console.log(`[headless] Environment loaded from ${LOAD} (tick ${env.total_ticks})`);
 } else {
     if (GRID_WIDTH !== null || GRID_HEIGHT !== null) {
