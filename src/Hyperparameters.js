@@ -20,8 +20,6 @@ const Hyperparams = {
         this.removeProb = 5;
         this.brainMutationChance = 25;
         this.mutationSymmetryChance = 10;
-        
-        this.rotationEnabled = true;
 
         this.foodBlocksReproduction = true;
         this.moversCanProduce = false;
@@ -31,7 +29,6 @@ const Hyperparams = {
 
         this.lookRange = 300;
         this.seeThroughSelf = false;
-        this.evolveIndependentEyeDecisions = true;
 
         this.thrustDamping = 0.05;
         this.rotationalDamping = 0.1;

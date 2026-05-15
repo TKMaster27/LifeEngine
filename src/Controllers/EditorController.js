@@ -160,10 +160,6 @@ class EditorController extends CanvasController{
             FossilRecord.changeSpeciesName(this.env.organism.species, new_name);
         }.bind(this));
 
-        $('#move-range-edit').change ( function() {
-            this.env.organism.move_range = parseInt($('#move-range-edit').val());
-        }.bind(this));
-		
         $('#mutation-rate-edit').change ( function() {
             this.env.organism.mutability = parseInt($('#mutation-rate-edit').val());
         }.bind(this));
@@ -217,38 +213,21 @@ class EditorController extends CanvasController{
 
         $('#species-name-edit').val(org.species.name);
         $('.cell-count').text("Cell count: "+org.anatomy.cells.length);
-        if (this.setMoveRangeVisibility()){
-            $('#move-range-edit').val(org.move_range);
-        }
 
-		$('#mutation-rate-edit').val(org.mutability);
+        $('#mutation-rate-edit').val(org.mutability);
         if (Hyperparams.useGlobalMutability) {
-			$('#mutation-rate-cont').css('display', 'none');
+            $('#mutation-rate-cont').css('display', 'none');
         }
         else {
             $('#mutation-rate-cont').css('display', 'block');
         }
-        
-        this.setMoveRangeVisibility();
+
         $('#cell-selections').css('display', 'grid');
         this.updateBrainInfo();
         $('#edit-organism-details').css('display', 'block');
         if (this.env.organism.brain instanceof NNBrain) {
             this.drawNNOverlay(this.env.organism);
         }
-    }
-
-
-    setMoveRangeVisibility() {
-        var org = this.env.organism;
-        if (org.anatomy.is_mover) {
-            $('#move-range-cont').css('display', 'block');
-            $('#move-range').css('display', 'block');
-            return true;
-        }
-        $('#move-range-cont').css('display', 'none');
-        $('#move-range').css('display', 'none');
-        return false;
     }
 
     setBrainEditorValues(name) {

@@ -52,9 +52,7 @@ class Organism {
 
     reproduce() {
         var org = new Organism(0, 0, this.env, this);
-        if(Hyperparams.rotationEnabled){
-            org.rotation = Directions.getRandomDirection();
-        }
+        org.rotation = Directions.getRandomDirection();
         var prob = this.mutability;
         if (Hyperparams.useGlobalMutability){
             prob = Hyperparams.globalMutability;
@@ -186,9 +184,6 @@ class Organism {
     }
 
     attemptRotate(rotation=null) {
-        if(!Hyperparams.rotationEnabled){
-            return true;
-        }
         if(rotation == null){
             rotation = Directions.getRandomDirection();
         }
@@ -310,13 +305,16 @@ class Organism {
             let mover_idx = 0;
             for (const m of this.anatomy.cells) {
                 if (m.state !== CellStates.mover) continue;
-                const abs_dir = m.getAbsoluteDirection();
-                const [ux, uy] = Directions.scalars[abs_dir];
                 const thrust = (thrusts && thrusts[mover_idx] != null) ? thrusts[mover_idx] : 0;
+                // Linear thrust applied in world frame.
+                const [ux, uy] = Directions.scalars[m.getAbsoluteDirection()];
                 fx += thrust * ux;
                 fy += thrust * uy;
-                // 2D torque: r × F = loc_col*Fy - loc_row*Fx (body-frame offset)
-                torque += m.loc_col * (thrust * uy) - m.loc_row * (thrust * ux);
+                // Torque computed entirely in body frame so the moment arm is
+                // rotation-invariant: an asymmetric body produces the same
+                // turning behaviour regardless of its current world rotation.
+                const [bx, by] = Directions.scalars[m.direction];
+                torque += m.loc_col * (thrust * by) - m.loc_row * (thrust * bx);
                 mover_idx++;
             }
 
@@ -384,8 +382,14 @@ class Organism {
     loadRaw(org) {
         SerializeHelper.overwriteNonObjects(org, this);
         this.anatomy.loadRaw(org.anatomy);
-        if (org.brain)
+        if (org.brain) {
             this.brain.loadRaw(org.brain);
+        } else if (this.brain instanceof NNBrain) {
+            // anatomy.loadRaw uses addInheritCell which deliberately skips
+            // brain notifications, so the substrate is still empty here.
+            // Force a rebuild so anatomy and brain stay in sync.
+            this.brain.buildSubstrate();
+        }
     }
 }
 
