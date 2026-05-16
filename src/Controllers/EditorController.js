@@ -474,6 +474,33 @@ class EditorController extends CanvasController{
             return `<td title="${w.toFixed(3)}" style="background:rgb(${r},${g},0);width:18px;height:14px;font-size:9px;text-align:center;color:#eee">${w.toFixed(1)}</td>`;
         }
 
+        function activationCell(v) {
+            const mag = Math.min(1, Math.abs(v));
+            const r = v < 0 ? Math.round(200 * mag) : 0;
+            const g = v > 0 ? Math.round(200 * mag) : 0;
+            return `<td title="${v.toFixed(3)}" style="background:rgb(${r},${g},0);width:18px;height:14px;font-size:9px;text-align:center;color:#eee;border:1px solid #555">${v.toFixed(2)}</td>`;
+        }
+
+        // Current activations (from last tick — or zeros if organism hasn't acted yet)
+        let hiddenActRow = '';
+        for (let h = 0; h < n_hidden; h++) {
+            hiddenActRow += activationCell(brain.hidden_buffer[h] || 0);
+        }
+        let thrustActRow = '';
+        for (let j = 0; j < n_movers; j++) {
+            const t = (brain.last_thrusts && brain.last_thrusts[j] != null) ? brain.last_thrusts[j] : 0;
+            thrustActRow += activationCell(t);
+        }
+
+        const actStyle = 'border-collapse:collapse;font-family:monospace;margin-bottom:2px';
+        const actSection = `
+            <p style="margin:4px 0 1px;font-size:11px;font-weight:bold;color:#ccc">Activations (last tick)</p>
+            <table style="${actStyle}">
+                <tr><td style="font-size:10px;padding:1px 4px;white-space:nowrap;color:#aaa">hidden</td>${hiddenActRow}</tr>
+                <tr><td style="font-size:10px;padding:1px 4px;white-space:nowrap;color:#aaa">thrust</td>${thrustActRow}</tr>
+            </table>
+        `;
+
         // W1 table: rows = inputs (eye × feature), cols = hidden neurons
         let w1Header = '<tr><th style="font-size:10px;padding:1px 3px">In \\ H</th>';
         for (let h = 0; h < n_hidden; h++) w1Header += `<th style="font-size:10px;padding:1px 3px">H${h}</th>`;
@@ -509,7 +536,8 @@ class EditorController extends CanvasController{
 
         const tableStyle = 'border-collapse:collapse;font-family:monospace';
         brainMaps.html(`
-            <div style="overflow:auto;max-height:320px;margin-top:4px">
+            <div style="overflow:auto;max-height:400px;margin-top:4px">
+                ${actSection}
                 <p style="margin:2px 0 1px;font-size:11px;font-weight:bold;color:#ccc">W1 — input → hidden</p>
                 <table style="${tableStyle}">${w1Header}${w1Rows}</table>
                 <p style="margin:6px 0 1px;font-size:11px;font-weight:bold;color:#ccc">W2 — hidden → output</p>
@@ -563,38 +591,59 @@ class EditorController extends CanvasController{
                 ctx.stroke();
             }
 
-            // draw mover direction arrows
+            // draw mover thrust arrows — length and color encode last-tick thrust
             ctx.setLineDash([]);
+            const lastThrusts = org.brain.last_thrusts;
+            let mover_idx = 0;
             for (const moverLocal of movers) {
                 const realCell = org.getRealCell(moverLocal);
-                if (!realCell || typeof moverLocal.getAbsoluteDirection !== 'function') continue;
+                if (!realCell || typeof moverLocal.getAbsoluteDirection !== 'function') { mover_idx++; continue; }
                 const cx = realCell.x + half;
                 const cy = realCell.y + half;
                 const absDir = moverLocal.getAbsoluteDirection();
                 const vec = Directions.scalars[absDir];
-                if (!vec) continue;
+                if (!vec) { mover_idx++; continue; }
                 const [dx, dy] = vec;
-                const arrowLen = half * 1.6;
+
+                const thrust = (lastThrusts && mover_idx < lastThrusts.length) ? lastThrusts[mover_idx] : 0;
+                const mag    = Math.abs(thrust);
+                // minimum 20 % length so the arrow is always visible even at low thrust
+                const arrowLen = half * 1.6 * Math.max(0.2, mag);
                 const ex = cx + dx * arrowLen;
                 const ey = cy + dy * arrowLen;
 
-                ctx.strokeStyle = 'rgba(0,220,255,0.9)';
-                ctx.fillStyle  = 'rgba(0,220,255,0.9)';
-                ctx.lineWidth = 2;
+                // cyan = forward thrust, orange = reverse
+                const color = thrust >= 0 ? 'rgba(0,220,255,0.9)' : 'rgba(255,140,0,0.9)';
+                ctx.strokeStyle = color;
+                ctx.fillStyle   = color;
+                ctx.lineWidth   = 2;
                 ctx.beginPath();
                 ctx.moveTo(cx, cy);
                 ctx.lineTo(ex, ey);
                 ctx.stroke();
 
-                // arrowhead
-                const headLen = Math.max(3, half * 0.5);
-                const angle = Math.atan2(ey - cy, ex - cx);
-                ctx.beginPath();
-                ctx.moveTo(ex, ey);
-                ctx.lineTo(ex - headLen * Math.cos(angle - 0.4), ey - headLen * Math.sin(angle - 0.4));
-                ctx.lineTo(ex - headLen * Math.cos(angle + 0.4), ey - headLen * Math.sin(angle + 0.4));
-                ctx.closePath();
-                ctx.fill();
+                // arrowhead (skip when thrust is negligible)
+                if (mag > 0.05) {
+                    const headLen = Math.max(3, half * 0.5);
+                    const angle = Math.atan2(ey - cy, ex - cx);
+                    ctx.beginPath();
+                    ctx.moveTo(ex, ey);
+                    ctx.lineTo(ex - headLen * Math.cos(angle - 0.4), ey - headLen * Math.sin(angle - 0.4));
+                    ctx.lineTo(ex - headLen * Math.cos(angle + 0.4), ey - headLen * Math.sin(angle + 0.4));
+                    ctx.closePath();
+                    ctx.fill();
+                }
+
+                // thrust value label inside the mover cell
+                if (cs >= 8) {
+                    ctx.fillStyle = 'rgba(255,255,255,0.9)';
+                    ctx.font = `bold ${Math.max(7, Math.floor(cs * 0.38))}px monospace`;
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'middle';
+                    ctx.fillText(thrust.toFixed(2), cx, cy);
+                }
+
+                mover_idx++;
             }
         } catch (e) {
             console.error('drawNNOverlay error:', e);

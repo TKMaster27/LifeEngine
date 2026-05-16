@@ -75,7 +75,7 @@ const FossilRecord = {
     },
 
     setData() {
-        // all parallel arrays
+        // sliding-window arrays (capped at record_size_limit; used by the live in-browser charts)
         this.tick_record = [];
         this.pop_counts = [];
         this.species_counts = [];
@@ -84,6 +84,15 @@ const FossilRecord = {
         this.av_cell_counts = [];
         this.species_diet_counts = [];
         this.population_diet_counts = [];
+        // full-history arrays (never shifted; written to disk on serialize for post-run analysis)
+        this.full_tick_record = [];
+        this.full_pop_counts = [];
+        this.full_species_counts = [];
+        this.full_av_mut_rates = [];
+        this.full_av_cells = [];
+        this.full_av_cell_counts = [];
+        this.full_species_diet_counts = [];
+        this.full_population_diet_counts = [];
         this.updateData();
     },
 
@@ -96,6 +105,16 @@ const FossilRecord = {
         this.species_diet_counts.push(this.calcDietSpecializationCounts());
         this.population_diet_counts.push(this.calcPopulationDietCounts());
         this.calcCellCountAverages();
+        // mirror the just-pushed values into the full-history arrays before any shift.
+        const last = this.tick_record.length - 1;
+        this.full_tick_record.push(this.tick_record[last]);
+        this.full_pop_counts.push(this.pop_counts[last]);
+        this.full_species_counts.push(this.species_counts[last]);
+        this.full_av_mut_rates.push(this.av_mut_rates[last]);
+        this.full_av_cells.push(this.av_cells[last]);
+        this.full_av_cell_counts.push(this.av_cell_counts[last]);
+        this.full_species_diet_counts.push(this.species_diet_counts[last]);
+        this.full_population_diet_counts.push(this.population_diet_counts[last]);
         while (this.tick_record.length > this.record_size_limit) {
             this.tick_record.shift();
             this.pop_counts.shift();
@@ -224,7 +243,20 @@ const FossilRecord = {
     serialize() {
         this.updateData();
         let record = SerializeHelper.copyNonObjects(this);
+        // Full history from tick 0 — the canonical record_size-unbounded data.
         record.records = {
+            tick_record:this.full_tick_record,
+            pop_counts:this.full_pop_counts,
+            species_counts:this.full_species_counts,
+            av_mut_rates:this.full_av_mut_rates,
+            av_cells:this.full_av_cells,
+            av_cell_counts:this.full_av_cell_counts,
+            species_diet_counts: this.full_species_diet_counts,
+            population_diet_counts: this.full_population_diet_counts,
+        };
+        // Sliding-window snapshot the in-browser charts were using, kept around
+        // for any consumer that explicitly wants the last record_size_limit ticks.
+        record.window_records = {
             tick_record:this.tick_record,
             pop_counts:this.pop_counts,
             species_counts:this.species_counts,
@@ -265,8 +297,23 @@ const FossilRecord = {
 
     loadRaw(record) {
         SerializeHelper.overwriteNonObjects(record, this);
-        for (let key in record.records) {
-            this[key] = record.records[key];
+        // `records` now holds full history (post-change). Mirror it into both the
+        // sliding window and the full-history arrays so loading a freshly-saved
+        // file works correctly even though the window will be re-shifted on the
+        // next updateData() call.
+        if (record.records) {
+            for (let key in record.records) {
+                this[key] = record.records[key];
+                this['full_' + key] = (record.records[key] || []).slice();
+            }
+        }
+        // Older saves wrote only sliding-window data into `records` and have no
+        // full history. Newer saves include both for back-compat with downstream
+        // tools — prefer the explicit window_records when present.
+        if (record.window_records) {
+            for (let key in record.window_records) {
+                this[key] = record.window_records[key];
+            }
         }
     },
 

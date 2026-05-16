@@ -63,6 +63,7 @@ class NNBrain extends Brain {
         this.n_outputs = 0;
         this.obs_buffer    = new Float32Array(0);
         this.hidden_buffer = new Float32Array(0);
+        this.last_thrusts  = new Float32Array(0);
         this.eye_cell_count = 0;
         this.buildSubstrate();
     }
@@ -126,10 +127,12 @@ class NNBrain extends Brain {
                     if (feature >= FEAT_FOOD_0 && feature <= FEAT_FOOD_3) {
                         const foodType = feature - FEAT_FOOD_0;
                         new_w1[i * new_n_hidden + h] = hasDiet
-                            ? (dietSet.has(foodType) ? 1.0 : -0.2)
+                            ? (dietSet.has(foodType) ? 1.0 : 0.1)
                             : gaussRandom() * 0.1;
                     } else if (feature === FEAT_KILLER) {
                         new_w1[i * new_n_hidden + h] = -1.0;
+                    } else if (feature === FEAT_EMPTY) {
+                        new_w1[i * new_n_hidden + h] = 0.3;
                     } else {
                         new_w1[i * new_n_hidden + h] = gaussRandom() * 0.1;
                     }
@@ -169,6 +172,7 @@ class NNBrain extends Brain {
         this.n_outputs     = new_n_outputs;
         this.obs_buffer    = new Float32Array(new_n_inputs);
         this.hidden_buffer = new Float32Array(new_n_hidden);
+        this.last_thrusts  = new Float32Array(new_n_outputs);
     }
 
     observe(cell, distance, direction, eye_index, dx, dy) {
@@ -207,6 +211,7 @@ class NNBrain extends Brain {
             }
         }
         this.obs_buffer.fill(0);
+        this.last_thrusts = thrusts;
         return { thrusts };
     }
 
@@ -238,6 +243,7 @@ class NNBrain extends Brain {
             this.w2            = new Float32Array(other.w2);
             this.hidden_buffer = new Float32Array(this.n_hidden);
             this.obs_buffer    = new Float32Array(this.n_inputs);
+            this.last_thrusts  = new Float32Array(this.n_outputs);
             this.eye_cell_count = other.eye_cell_count;
         } else {
             this.loadRaw(other);
@@ -269,6 +275,7 @@ class NNBrain extends Brain {
             this.w2            = new Float32Array(raw.w2 || []);
             this.hidden_buffer = new Float32Array(this.n_hidden);
             this.obs_buffer    = new Float32Array(this.n_inputs);
+            this.last_thrusts  = new Float32Array(this.n_outputs);
         } else {
             // old single-matrix format — rebuild with current Hyperparams.nnHiddenSize
             this.buildSubstrate();
