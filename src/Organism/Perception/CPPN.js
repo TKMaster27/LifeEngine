@@ -18,23 +18,28 @@
 //     distance              — euclidean distance in 3-space, normalised
 //     bias                  — constant 1.0
 //
-// CPPN outputs (2):
-//     weight                — substrate connection weight (tanh-bounded ∈ [-3, 3])
-//     leo                   — link-expression gate (substrate edge exists iff leo > 0)
+// CPPN outputs (3):
+//     weight                — substrate connection weight (tanh-bounded ∈ [-1, 1])
+//     leo                   — link-expression gate (substrate edge exists iff leo > 0.5)
+//     tau                   — per-node CTRNN time constant (sigmoid ∈ (0, 1),
+//                             mapped to [ctrnnMinTau, ctrnnMaxTau] at the
+//                             substrate-build step). Only meaningful when the
+//                             query coords are a hidden's self-position; for
+//                             non-self queries the value is ignored.
 //
 // Node IDs are strings:
-//     "in:src_x" / "in:src_y" / ...  — input ids (constant set)
-//     "out:weight" / "out:leo"       — output ids (constant set)
-//     "ch:<n>"                       — cppn hidden ids, minted by Innovation
+//     "in:src_x" / "in:src_y" / ...           — input ids (constant set)
+//     "out:weight" / "out:leo" / "out:tau"    — output ids (constant set)
+//     "ch:<n>"                                — cppn hidden ids, minted by Innovation
 
 const Innovation = require("./Innovation");
 
 const INPUT_IDS  = ["in:src_x", "in:src_y", "in:src_z",
                     "in:dst_x", "in:dst_y", "in:dst_z",
                     "in:distance", "in:bias"];
-const OUTPUT_IDS = ["out:weight", "out:leo"];
+const OUTPUT_IDS = ["out:weight", "out:leo", "out:tau"];
 const N_INPUTS   = INPUT_IDS.length;   // 8
-const N_OUTPUTS  = OUTPUT_IDS.length;  // 2
+const N_OUTPUTS  = OUTPUT_IDS.length;  // 3
 
 const ACTIVATIONS = {
     sigmoid:  (x) => 1 / (1 + Math.exp(-x)),
@@ -70,9 +75,14 @@ class CPPN {
         this.inputs  = INPUT_IDS.slice();
         this.outputs = OUTPUT_IDS.slice();
         this.hiddens = [];                  // [{ id, activation }]
-        // Per-output activation. weight uses tanh (so substrate weight ∈ [-1, 1]
-        // before scaling), leo uses sigmoid so its threshold > 0 maps to > 0.5.
-        this.output_activations = { "out:weight": "tanh", "out:leo": "sigmoid" };
+        // Per-output activation. `weight` uses tanh (substrate weight ∈ [-1, 1]
+        // before scaling), `leo` and `tau` use sigmoid so their (0, 1) range is
+        // easy to interpret as gate/normalised-τ.
+        this.output_activations = {
+            "out:weight": "tanh",
+            "out:leo":    "sigmoid",
+            "out:tau":    "sigmoid",
+        };
 
         this.connections = [];               // [{ innovation_id, src, dst, weight, enabled }]
 
@@ -104,6 +114,13 @@ class CPPN {
                 if (inp === "in:bias" && out === "out:leo") {
                     weight = 3.0;
                 } else if (out === "out:leo") {
+                    weight = gaussRandom() * 0.1;
+                } else if (inp === "in:bias" && out === "out:tau") {
+                    // sigmoid(-0.5) ≈ 0.378 — with the default tau range
+                    // [minTau=1, maxTau=8] this maps to τ ≈ 3.6, matching the
+                    // pre-CPPN-τ default (3.0). Mutations move it from there.
+                    weight = -0.5;
+                } else if (out === "out:tau") {
                     weight = gaussRandom() * 0.1;
                 } else {
                     // Near-zero start for out:weight feeders — see comment above.
@@ -214,7 +231,9 @@ class CPPN {
         if (this._compiled === null) this._recompile();
         const c = this._compiled;
         if (c._degenerate) {
-            return { weight: 0, leo: 0, expressed: false };
+            // 0.5 is the sigmoid midpoint → τ at midpoint of the configured
+            // range; weight=0 → no signal; leo=0 → gate closed.
+            return { weight: 0, leo: 0, tau: 0.5, expressed: false };
         }
         const acts = new Float64Array(c.n_total);
 
@@ -248,7 +267,8 @@ class CPPN {
 
         const weight = acts[idx.get("out:weight")];
         const leo    = acts[idx.get("out:leo")];     // sigmoid output ∈ (0, 1)
-        return { weight, leo, expressed: leo > 0.5 };
+        const tau    = acts[idx.get("out:tau")];     // sigmoid output ∈ (0, 1)
+        return { weight, leo, tau, expressed: leo > 0.5 };
     }
 
     // ─── Mutations ───────────────────────────────────────────────────────

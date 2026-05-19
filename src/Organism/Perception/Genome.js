@@ -53,23 +53,33 @@ class Genome {
         // gives the network "thought momentum". Zeroed on construction,
         // resized whenever hiddens.length changes, and reset to zero on
         // cloneInto() so offspring start with a clean slate.
-        this._hidden_state = new Float32Array(0);
+        this._hidden_state    = new Float32Array(0);
+        // Previous tick's hidden activations — read by *recurrent* (hidden →
+        // hidden) connections in forward(). One-tick delay means a hidden
+        // can feed back into itself or any sibling without forcing the
+        // forward pass to settle a fixed point. Zeroed on construction and
+        // mirrored to the post-forward activations at the end of each tick.
+        this._prev_hidden_acts = new Float32Array(0);
 
         // Compiled-form caches. Rebuilt by _recompile() after any structural change.
         this._compiled = null;
     }
 
-    /** Resize / zero `_hidden_state` to match current hiddens.length. */
+    /** Resize / zero `_hidden_state` (and the previous-activation mirror used
+     *  by recurrent edges) to match current hiddens.length. */
     _resyncHiddenState() {
         if (this._hidden_state.length !== this.hiddens.length) {
-            this._hidden_state = new Float32Array(this.hiddens.length);
+            this._hidden_state    = new Float32Array(this.hiddens.length);
+            this._prev_hidden_acts = new Float32Array(this.hiddens.length);
         }
     }
 
     /** Zero the CTRNN state — called at birth so offspring don't inherit
-     *  membrane potentials from their parents. */
+     *  membrane potentials from their parents. Also zeroes the recurrent
+     *  delay-line so previous-tick activations don't carry over. */
     resetState() {
         this._hidden_state.fill(0);
+        this._prev_hidden_acts.fill(0);
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -86,15 +96,16 @@ class Genome {
     }
 
     /** Returns true iff a (src, dst) pair is a legal connection target under
-     *  the 1-hidden-layer rule. */
+     *  the 1-hidden-layer rule. Lateral / recurrent connections WITHIN the
+     *  hidden layer are allowed (including self-loops) — these are evaluated
+     *  with one-tick delay in forward(), so they can carry "memory" without
+     *  forcing a topological sort. */
     _legalConnectionPair(src, dst) {
         const st = this._nodeType(src);
         const dt = this._nodeType(dst);
-        if (st === null || dt === null)        return false;
-        if (st === "output")                   return false;   // no fan-out from outputs
-        if (dt === "input")                    return false;   // no fan-in to inputs
-        if (st === "hidden" && dt === "hidden")return false;   // no lateral
-        if (src === dst)                       return false;   // no self-loops
+        if (st === null || dt === null) return false;
+        if (st === "output")            return false;   // no fan-out from outputs
+        if (dt === "input")             return false;   // no fan-in to inputs
         return true;
     }
 
@@ -278,8 +289,15 @@ class Genome {
         for (const id of this.outputs) idx.set(id, i++);
         const n_total = i;
 
-        const incoming_hidden = this.hiddens.map(() => []);
-        const incoming_output = this.outputs.map(() => []);
+        // For hidden nodes we split incoming into two lists: feedforward
+        // edges from inputs (which read THIS tick's activations) and
+        // recurrent edges from other hiddens (which read LAST tick's). For
+        // output nodes everything reads this tick's activations — outputs
+        // never participate in a delay line because they only ever appear
+        // as sinks.
+        const incoming_hidden_ff  = this.hiddens.map(() => []);
+        const incoming_hidden_rec = this.hiddens.map(() => []);
+        const incoming_output     = this.outputs.map(() => []);
         for (const conn of this.connections) {
             if (!conn.enabled) continue;
             const src_index = idx.get(conn.src);
@@ -288,7 +306,17 @@ class Genome {
             if (dst_index >= output_offset) {
                 incoming_output[dst_index - output_offset].push({ src_index, weight: conn.weight });
             } else if (dst_index >= hidden_offset) {
-                incoming_hidden[dst_index - hidden_offset].push({ src_index, weight: conn.weight });
+                const h_dst = dst_index - hidden_offset;
+                if (src_index >= hidden_offset) {
+                    // hidden → hidden: read source from last tick's mirror,
+                    // indexed by the source's position within `this.hiddens`.
+                    incoming_hidden_rec[h_dst].push({
+                        src_hidden_index: src_index - hidden_offset,
+                        weight: conn.weight,
+                    });
+                } else {
+                    incoming_hidden_ff[h_dst].push({ src_index, weight: conn.weight });
+                }
             }
             // dst < hidden_offset would mean a connection into an input — already
             // forbidden by _legalConnectionPair, but skip defensively.
@@ -304,7 +332,8 @@ class Genome {
             activations:     new Float32Array(n_total),
             hidden_biases:   Float32Array.from(this.hiddens.map(h => h.bias || 0)),
             hidden_taus:     Float32Array.from(this.hiddens.map(h => h.tau  != null ? h.tau : 1.0)),
-            incoming_hidden,
+            incoming_hidden_ff,
+            incoming_hidden_rec,
             incoming_output,
         };
     }
@@ -335,12 +364,20 @@ class Genome {
         for (let i = 0; i < c.n_inputs; i++) {
             acts[i] = obs_buffer[i] || 0;
         }
-        // Stage 2: hiddens — CTRNN leaky-integrator update, then tanh(y + θ).
+        // Stage 2: hiddens. Feedforward edges read THIS tick's inputs;
+        // recurrent (h→h) edges read the PREVIOUS tick's hidden activations
+        // from `_prev_hidden_acts`. The one-tick delay lets the network have
+        // cycles (including self-loops) without needing a fixed-point solver.
+        const prev = this._prev_hidden_acts;
         for (let h = 0; h < c.n_hiddens; h++) {
             let sum = 0;
-            const incoming = c.incoming_hidden[h];
-            for (let k = 0; k < incoming.length; k++) {
-                sum += incoming[k].weight * acts[incoming[k].src_index];
+            const ff = c.incoming_hidden_ff[h];
+            for (let k = 0; k < ff.length; k++) {
+                sum += ff[k].weight * acts[ff[k].src_index];
+            }
+            const rec = c.incoming_hidden_rec[h];
+            for (let k = 0; k < rec.length; k++) {
+                sum += rec[k].weight * prev[rec[k].src_hidden_index];
             }
             if (ctrnnOn) {
                 const tau = Math.max(c.hidden_taus[h], minTau);
@@ -349,8 +386,6 @@ class Genome {
                 state[h] = new_y;
                 acts[c.hidden_offset + h] = Math.tanh(new_y + c.hidden_biases[h]);
             } else {
-                // Pure feedforward — bias folds into the pre-tanh sum so the
-                // numerical result matches the Phase-3 path bit-for-bit.
                 acts[c.hidden_offset + h] = Math.tanh(sum + c.hidden_biases[h]);
             }
         }
@@ -362,6 +397,10 @@ class Genome {
                 sum += incoming[k].weight * acts[incoming[k].src_index];
             }
             acts[c.output_offset + o] = Math.tanh(sum);
+        }
+        // Snapshot hidden activations for next tick's recurrent reads.
+        for (let h = 0; h < c.n_hiddens; h++) {
+            prev[h] = acts[c.hidden_offset + h];
         }
         return acts.subarray(c.output_offset, c.output_offset + c.n_outputs);
     }
@@ -426,8 +465,10 @@ class Genome {
             src: c.src, dst: c.dst,
             weight: c.weight, enabled: c.enabled,
         }));
-        // Offspring start with FRESH membrane state — no inherited "thoughts".
-        other._hidden_state = new Float32Array(this.hiddens.length);
+        // Offspring start with FRESH membrane state AND empty recurrent
+        // delay-line — no inherited "thoughts".
+        other._hidden_state     = new Float32Array(this.hiddens.length);
+        other._prev_hidden_acts = new Float32Array(this.hiddens.length);
         other._compiled = null;
     }
 }

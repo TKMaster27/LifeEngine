@@ -442,6 +442,7 @@ class EditorController extends CanvasController{
         const brainMaps = $('#brain-maps');
         brainMaps.empty();
         $('#brain-editor-controls').remove();
+        this._stopBrainGraphRefresh();
 
         const genome = brain && brain.genome;
         if (!genome) {
@@ -609,16 +610,401 @@ class EditorController extends CanvasController{
             <table style="${tableStyle}">${skipHeader}${skipRows}</table>
         `;
 
+        // Brain graph SVG — live-updating visualisation of nodes and signal flow.
+        // Built once with stable ids, then refreshed via _refreshBrainGraph().
+        const graphSection = this._buildBrainGraphSVG(org);
+
         brainMaps.html(`
-            <div style="overflow:auto;max-height:400px;margin-top:4px">
-                ${actSection}
-                ${w1Section}
-                ${w2Section}
-                ${skipSection}
+            <div style="overflow:auto;max-height:600px;margin-top:4px">
+                <div style="display:flex; gap:10px; align-items:flex-start; flex-wrap:wrap">
+                    <details open style="flex:1 1 auto; min-width:0">
+                        <summary style="cursor:pointer;font-size:11px;color:#aaa;margin-bottom:4px;user-select:none">
+                            Heatmap (click to collapse)
+                        </summary>
+                        ${actSection}
+                        ${w1Section}
+                        ${w2Section}
+                        ${skipSection}
+                    </details>
+                    <div style="flex:0 0 auto">
+                        ${graphSection}
+                    </div>
+                </div>
             </div>
         `);
 
+        this._refreshBrainGraph(org);
+        this._startBrainGraphRefresh(org);
         this.updateBrainSummary();
+    }
+
+    // ─── Brain graph (SVG) ───────────────────────────────────────────────
+
+    /** Build the static SVG skeleton — nodes + connections — for `org`'s
+     *  brain. Live colours / line widths are filled in by `_refreshBrainGraph`
+     *  immediately afterward and on every poll tick. */
+    _buildBrainGraphSVG(org) {
+        const FEATURE_NAMES = [
+            'empty','food0','food1','food2','food3',
+            'wall','mouth','producer','emitter',
+            'mover','killer','armor','eye',
+            'dist','dx','dy',
+        ];
+        const INPUTS_PER_EYE = FEATURE_NAMES.length;
+
+        const genome = org.brain.genome;
+        const n_eyes   = org.brain.eye_cell_count || (genome.inputs.length / INPUTS_PER_EYE) | 0;
+        const n_hidden = genome.hiddens.length;
+        const n_movers = genome.outputs.length;
+
+        // SVG height needs a bit more vertical room than activation-only
+        // labels would require, since each hidden node now also shows its
+        // τ value under the activation row.
+        const W = 460, H = Math.max(280, 44 * Math.max(n_eyes, n_hidden, n_movers, 1) + 60);
+        const COL_X = { eye: 60, hidden: 230, output: 400 };
+        const NODE_R = 16;
+
+        const yPositions = (n) => {
+            if (n === 0) return [];
+            if (n === 1) return [H / 2];
+            const pad = 40;
+            const step = (H - 2 * pad) / (n - 1);
+            return Array.from({ length: n }, (_, i) => pad + step * i);
+        };
+
+        const eyeY    = yPositions(n_eyes);
+        const hiddenY = yPositions(n_hidden);
+        const outY    = yPositions(n_movers);
+
+        // ── Build connection lines ───────────────────────────────────────
+        // Eye→target connections are aggregated per (eye, target) pair: a
+        // single line carries the dominant outgoing weight across that eye's
+        // 16 input features. Hidden→output and any recurrent edges render
+        // one line per genome connection.
+        const lines = [];
+
+        // helper: average weight from eye e to a target node id `dst`
+        function aggEyeWeight(eyeIndex, dst) {
+            let sum = 0;
+            for (let f = 0; f < INPUTS_PER_EYE; f++) {
+                const src = "i:" + eyeIndex + ":" + f;
+                const conn = genome.connections.find(c => c.src === src && c.dst === dst && c.enabled);
+                if (conn) sum += conn.weight;
+            }
+            return sum / INPUTS_PER_EYE;
+        }
+
+        // Eye → hidden
+        for (let e = 0; e < n_eyes; e++) {
+            for (let h = 0; h < n_hidden; h++) {
+                const w = aggEyeWeight(e, genome.hiddens[h].id);
+                lines.push({
+                    id:    `bg-conn-eye${e}-h${h}`,
+                    kind:  "eye2hidden",
+                    x1: COL_X.eye + NODE_R, y1: eyeY[e],
+                    x2: COL_X.hidden - NODE_R, y2: hiddenY[h],
+                    weight: w,
+                    eye: e, dstId: genome.hiddens[h].id,
+                });
+            }
+        }
+        // Eye → output (skip / direct)
+        for (let e = 0; e < n_eyes; e++) {
+            for (let o = 0; o < n_movers; o++) {
+                const w = aggEyeWeight(e, genome.outputs[o]);
+                if (Math.abs(w) < 1e-6) continue; // skip vanishing skip-connections
+                lines.push({
+                    id:    `bg-conn-eye${e}-o${o}`,
+                    kind:  "eye2out",
+                    x1: COL_X.eye + NODE_R, y1: eyeY[e],
+                    x2: COL_X.output - NODE_R, y2: outY[o],
+                    weight: w,
+                    eye: e, dstId: genome.outputs[o],
+                });
+            }
+        }
+        // Hidden → output
+        for (let h = 0; h < n_hidden; h++) {
+            for (let o = 0; o < n_movers; o++) {
+                const conn = genome.connections.find(c =>
+                    c.src === genome.hiddens[h].id && c.dst === genome.outputs[o]
+                );
+                if (!conn) continue;
+                lines.push({
+                    id:    `bg-conn-h${h}-o${o}`,
+                    kind:  "hidden2out",
+                    x1: COL_X.hidden + NODE_R, y1: hiddenY[h],
+                    x2: COL_X.output - NODE_R, y2: outY[o],
+                    weight: conn.weight,
+                    enabled: conn.enabled,
+                    srcId: conn.src, dstId: conn.dst,
+                });
+            }
+        }
+        // Recurrent / lateral: hidden → hidden (currently rejected by Genome
+        // but render if any sneak in — Phase 4+ might allow). Drawn as a
+        // curved Bezier so it doesn't overlap straight feedforward lines.
+        for (const c of genome.connections) {
+            if (!c.src.startsWith("h:") || !c.dst.startsWith("h:")) continue;
+            const sIdx = genome.hiddens.findIndex(x => x.id === c.src);
+            const dIdx = genome.hiddens.findIndex(x => x.id === c.dst);
+            if (sIdx < 0 || dIdx < 0) continue;
+            const sy = hiddenY[sIdx], dy = hiddenY[dIdx];
+            const bend = sIdx === dIdx ? 50 : 30 * (sy < dy ? 1 : -1);
+            lines.push({
+                id:    `bg-conn-h${sIdx}-h${dIdx}-rec`,
+                kind:  "recurrent",
+                x1: COL_X.hidden, y1: sy,
+                x2: COL_X.hidden, y2: dy,
+                cx: COL_X.hidden + 70, cy: (sy + dy) / 2 + bend,
+                weight: c.weight,
+                enabled: c.enabled,
+                srcId: c.src, dstId: c.dst,
+            });
+        }
+
+        // ── Render SVG ──────────────────────────────────────────────────
+        let svg = `<svg id="brain-graph-svg" width="${W}" height="${H}" `
+                + `viewBox="0 0 ${W} ${H}" style="background:#111;border:1px solid #333;border-radius:4px;display:block;margin-bottom:6px">`
+                + `<defs>`
+                + `  <marker id="bg-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">`
+                + `    <path d="M0,0 L10,5 L0,10 Z" fill="#888" /></marker>`
+                + `</defs>`;
+
+        // Column labels
+        svg += `<text x="${COL_X.eye}"    y="20" fill="#aaa" font-size="11" text-anchor="middle">Eyes</text>`;
+        svg += `<text x="${COL_X.hidden}" y="20" fill="#aaa" font-size="11" text-anchor="middle">Hidden</text>`;
+        svg += `<text x="${COL_X.output}" y="20" fill="#aaa" font-size="11" text-anchor="middle">Movers</text>`;
+
+        // Connections first so nodes draw on top
+        for (const ln of lines) {
+            if (ln.kind === "recurrent") {
+                const d = `M ${ln.x1 + NODE_R/2},${ln.y1} Q ${ln.cx},${ln.cy} ${ln.x2 + NODE_R/2},${ln.y2}`;
+                svg += `<path id="${ln.id}" d="${d}" stroke="#444" stroke-width="1" fill="none" marker-end="url(#bg-arrow)"><title>recurrent</title></path>`;
+            } else {
+                svg += `<line id="${ln.id}" x1="${ln.x1}" y1="${ln.y1}" x2="${ln.x2}" y2="${ln.y2}" stroke="#444" stroke-width="1"><title></title></line>`;
+            }
+        }
+
+        // Eye nodes
+        for (let e = 0; e < n_eyes; e++) {
+            svg += `<g id="bg-eye-${e}">`;
+            svg += `  <circle cx="${COL_X.eye}" cy="${eyeY[e]}" r="${NODE_R}" fill="#222" stroke="#999" stroke-width="1.5" />`;
+            svg += `  <text x="${COL_X.eye}" y="${eyeY[e] + 4}" fill="#eee" font-size="11" text-anchor="middle" font-family="monospace">E${e}</text>`;
+            svg += `  <text id="bg-eye-${e}-lbl" x="${COL_X.eye}" y="${eyeY[e] + NODE_R + 12}" fill="#888" font-size="9" text-anchor="middle">—</text>`;
+            svg += `</g>`;
+        }
+        // Hidden nodes — border colour + width encode the CTRNN time
+        // constant τ. Cool blue = fast / short-memory (τ near minTau),
+        // warm red = slow / long-memory (τ near maxTau). Thicker border =
+        // longer memory horizon. τ value is shown below the activation.
+        const minTau = (typeof Hyperparams !== "undefined" && Hyperparams.ctrnnMinTau != null) ? Hyperparams.ctrnnMinTau : 1.0;
+        const maxTau = (typeof Hyperparams !== "undefined" && Hyperparams.ctrnnMaxTau != null) ? Hyperparams.ctrnnMaxTau : 8.0;
+        const tauColour = (tau) => {
+            const t = Math.min(1, Math.max(0, (tau - minTau) / Math.max(0.001, (maxTau - minTau))));
+            const r = Math.round(60  + 200 * t);
+            const g = Math.round(140 - 60  * Math.abs(t - 0.5) * 2);
+            const b = Math.round(230 - 210 * t);
+            return { stroke: `rgb(${r},${g},${b})`, width: (1.5 + t * 2.5).toFixed(2) };
+        };
+        for (let h = 0; h < n_hidden; h++) {
+            const tau = (genome.hiddens[h] && genome.hiddens[h].tau != null) ? genome.hiddens[h].tau : 1.0;
+            const tc  = tauColour(tau);
+            svg += `<g id="bg-h-${h}">`;
+            svg += `  <circle cx="${COL_X.hidden}" cy="${hiddenY[h]}" r="${NODE_R}" fill="#222" stroke="${tc.stroke}" stroke-width="${tc.width}"><title>τ=${tau.toFixed(2)}</title></circle>`;
+            svg += `  <text x="${COL_X.hidden}" y="${hiddenY[h] + 4}" fill="#eee" font-size="11" text-anchor="middle" font-family="monospace">H${h}</text>`;
+            svg += `  <text id="bg-h-${h}-lbl" x="${COL_X.hidden}" y="${hiddenY[h] + NODE_R + 12}" fill="#888" font-size="9" text-anchor="middle">0.00</text>`;
+            svg += `  <text id="bg-h-${h}-tau" x="${COL_X.hidden}" y="${hiddenY[h] + NODE_R + 22}" fill="${tc.stroke}" font-size="9" text-anchor="middle" font-family="monospace">τ=${tau.toFixed(1)}</text>`;
+            svg += `</g>`;
+        }
+        // Output nodes
+        for (let o = 0; o < n_movers; o++) {
+            svg += `<g id="bg-o-${o}">`;
+            svg += `  <circle cx="${COL_X.output}" cy="${outY[o]}" r="${NODE_R}" fill="#222" stroke="#999" stroke-width="1.5" />`;
+            svg += `  <text x="${COL_X.output}" y="${outY[o] + 4}" fill="#eee" font-size="11" text-anchor="middle" font-family="monospace">M${o}</text>`;
+            svg += `  <text id="bg-o-${o}-lbl" x="${COL_X.output}" y="${outY[o] + NODE_R + 12}" fill="#888" font-size="9" text-anchor="middle">0.00</text>`;
+            svg += `</g>`;
+        }
+        svg += `</svg>`;
+
+        // Cache the parameters the refresh function needs.
+        this._brainGraph = {
+            org, n_eyes, n_hidden, n_movers, lines, INPUTS_PER_EYE, FEATURE_NAMES,
+            // colour palette for input features (matches food cell colours)
+            featureColour: {
+                food0: "#2F7AB7", food1: "#FF69B4", food2: "#FF0000", food3: "#FFFF00",
+                killer: "#F2317A", wall: "#888888", mouth: "#DE3641", producer: "#15DE59",
+                emitter: "#FFFFFF", mover: "#60D4FF", armor: "#7230DB", eye: "#FFFFFF",
+                empty: "#333333",
+            },
+        };
+        return svg;
+    }
+
+    /** The editor panel always renders against a *copy* of the clicked
+     *  organism (OrganismEditor.setOrganismToCopyOf). That copy never ticks,
+     *  so its activations are frozen. For the live graph we look up the real
+     *  organism in the world env via the environment controller's
+     *  `cur_org` reference — that one IS being ticked and its
+     *  `brain.genome._compiled.activations` advances every simulation step. */
+    _liveOrganismFor(editor_org) {
+        try {
+            const live = this.env
+                && this.env.engine
+                && this.env.engine.controlpanel
+                && this.env.engine.controlpanel.env_controller
+                && this.env.engine.controlpanel.env_controller.cur_org;
+            if (live && live.living) return live;
+        } catch (_) { /* fall through */ }
+        return editor_org;
+    }
+
+    /** Recompute live colours and line widths from the brain's current
+     *  compiled activations + last_thrusts. Called on a polling timer so the
+     *  visualisation tracks the simulation in real time. */
+    _refreshBrainGraph(editor_org) {
+        const cfg = this._brainGraph;
+        if (!cfg) return;
+        const org = this._liveOrganismFor(editor_org);
+        const brain = org.brain;
+        const genome = brain && brain.genome;
+        if (!genome) return;
+        const compiled = genome._compiled;
+        const acts = compiled ? compiled.activations : null;
+        const INPUTS_PER_EYE = cfg.INPUTS_PER_EYE;
+        const FEAT = cfg.FEATURE_NAMES;
+        const palette = cfg.featureColour;
+
+        const lerp = (a, b, t) => a + (b - a) * t;
+        const colorForActivation = (v) => {
+            // green for positive, red for negative, dark for zero.
+            const mag = Math.min(1, Math.abs(v));
+            if (v >= 0) {
+                const r = Math.round(lerp(34, 30, mag));
+                const g = Math.round(lerp(34, 220, mag));
+                const b = Math.round(lerp(34, 30, mag));
+                return `rgb(${r},${g},${b})`;
+            } else {
+                const r = Math.round(lerp(34, 230, mag));
+                const g = Math.round(lerp(34, 30, mag));
+                const b = Math.round(lerp(34, 30, mag));
+                return `rgb(${r},${g},${b})`;
+            }
+        };
+
+        // ── Eye nodes: colour by dominant feature being observed ─────────
+        for (let e = 0; e < cfg.n_eyes; e++) {
+            const base = e * INPUTS_PER_EYE;
+            // Inputs 0..12 are one-hot cell-type features; pick the index with
+            // activation 1.0 (or the largest if multiple).
+            let topF = -1, topV = 0;
+            if (acts) {
+                for (let f = 0; f < 13; f++) {
+                    const v = acts[base + f] || 0;
+                    if (v > topV) { topV = v; topF = f; }
+                }
+            }
+            const featName = (topF >= 0) ? FEAT[topF] : "—";
+            const col = (topV > 0.5 && palette[featName]) ? palette[featName] : "#222";
+            const $g = $(`#bg-eye-${e}`);
+            $g.find("circle").attr("fill", col).attr("stroke", topV > 0.5 ? "#fff" : "#999");
+            // distance / dx / dy stay encoded as small text suffix
+            let suffix = "";
+            if (acts && topV > 0.5) {
+                const dist = acts[base + 13] || 0;
+                suffix = ` d${dist.toFixed(2)}`;
+            }
+            $(`#bg-eye-${e}-lbl`).text((topF >= 0 ? featName : "empty") + suffix);
+        }
+
+        // ── Hidden nodes: colour the FILL by signed activation magnitude.
+        // We leave the circle's stroke alone — it was set at build time to
+        // encode τ (cool=fast, warm=slow) and τ doesn't change during the
+        // organism's lifetime, so it stays a stable visual cue.
+        const hidden_offset = compiled ? compiled.hidden_offset : 0;
+        for (let h = 0; h < cfg.n_hidden; h++) {
+            const v = acts ? acts[hidden_offset + h] : 0;
+            $(`#bg-h-${h}`).find("circle").attr("fill", colorForActivation(v));
+            $(`#bg-h-${h}-lbl`).text(v.toFixed(2));
+        }
+
+        // ── Output nodes: colour by last_thrusts ─────────────────────────
+        for (let o = 0; o < cfg.n_movers; o++) {
+            const t = (brain.last_thrusts && brain.last_thrusts[o] != null) ? brain.last_thrusts[o] : 0;
+            $(`#bg-o-${o}`).find("circle").attr("fill", colorForActivation(t));
+            $(`#bg-o-${o}-lbl`).text(t.toFixed(2));
+        }
+
+        // ── Connection lines: width + colour by current signal flow ──────
+        // For eye-sourced lines, flow = aggregate (weight × observed input)
+        // across that eye's 16 features. For hidden-sourced lines, flow =
+        // weight × source-hidden activation (recurrent edges show the value
+        // the next tick would actually integrate — i.e. last tick's hidden
+        // activation — which is what `_prev_hidden_acts` carries).
+        const flowFor = (ln) => {
+            if (!acts) return 0;
+            if (ln.kind === "eye2hidden" || ln.kind === "eye2out") {
+                const base = ln.eye * INPUTS_PER_EYE;
+                let sum = 0;
+                for (let f = 0; f < INPUTS_PER_EYE; f++) {
+                    const src = "i:" + ln.eye + ":" + f;
+                    const conn = genome.connections.find(c =>
+                        c.src === src && c.dst === ln.dstId && c.enabled
+                    );
+                    if (conn) sum += conn.weight * (acts[base + f] || 0);
+                }
+                return sum;
+            }
+            if (ln.kind === "hidden2out" || ln.kind === "recurrent") {
+                if (!ln.srcId.startsWith("h:")) return 0;
+                const hIdx = genome.hiddens.findIndex(x => x.id === ln.srcId);
+                if (hIdx < 0) return 0;
+                const srcAct = ln.kind === "recurrent" && genome._prev_hidden_acts
+                    ? genome._prev_hidden_acts[hIdx]
+                    : acts[hidden_offset + hIdx];
+                return (srcAct || 0) * ln.weight;
+            }
+            return 0;
+        };
+
+        for (const ln of cfg.lines) {
+            const flow = flowFor(ln);
+            const mag = Math.min(1, Math.abs(flow) / 2);
+            const w = Math.max(0.5, mag * 4);
+            const colour = flow >= 0
+                ? `rgba(60,220,90,${0.3 + 0.7 * mag})`
+                : `rgba(230,80,80,${0.3 + 0.7 * mag})`;
+            const $el = $("#" + ln.id);
+            if (ln.kind === "recurrent") {
+                $el.attr("stroke", colour).attr("stroke-width", w);
+            } else {
+                $el.attr("stroke", colour).attr("stroke-width", w);
+            }
+            $el.find("title").text(`w=${ln.weight.toFixed(2)}  flow=${flow.toFixed(2)}`);
+        }
+    }
+
+    _startBrainGraphRefresh(org) {
+        this._stopBrainGraphRefresh();
+        // Poll at ~7 Hz — fast enough that thrust changes look continuous,
+        // slow enough that refreshing dozens of SVG attributes doesn't hurt
+        // sim throughput. We refresh in place, no DOM rebuild.
+        this._brainGraphInterval = setInterval(() => {
+            // Skip if the SVG was removed from the DOM (panel closed).
+            if (!document.getElementById("brain-graph-svg")) {
+                this._stopBrainGraphRefresh();
+                return;
+            }
+            try { this._refreshBrainGraph(org); }
+            catch (e) { this._stopBrainGraphRefresh(); }
+        }, 140);
+    }
+
+    _stopBrainGraphRefresh() {
+        if (this._brainGraphInterval) {
+            clearInterval(this._brainGraphInterval);
+            this._brainGraphInterval = null;
+        }
     }
 
     drawNNOverlay(org) {

@@ -222,7 +222,23 @@ class NNBrain extends Brain {
         const g = new Genome();
         g.inputs  = input_ids.slice();
         g.outputs = output_ids.slice();
-        g.setHiddenGrid(HIDDEN_GRID);
+
+        // ── Pass 1: ask the CPPN for τ at each hidden-grid position ──────
+        // We query the CPPN at (h.pos, h.pos, distance=0) — i.e. a self-pair
+        // — and map its `out:tau` (sigmoid ∈ (0, 1)) to the configured
+        // [ctrnnMinTau, ctrnnMaxTau] range. This makes τ a function of
+        // substrate position, so the CPPN can evolve "fast-reactor" vs
+        // "long-memory" regions of the hidden layer separately.
+        const minTau = Hyperparams.ctrnnMinTau != null ? Hyperparams.ctrnnMinTau : 1.0;
+        const maxTau = Hyperparams.ctrnnMaxTau != null ? Hyperparams.ctrnnMaxTau : 8.0;
+        const hiddenWithTau = HIDDEN_GRID.map(h => {
+            const q = this.cppn.query(h.x, h.y, h.z, h.x, h.y, h.z, 0);
+            const tNorm = (q.tau != null && Number.isFinite(q.tau)) ? q.tau : 0.5;
+            const tau   = minTau + tNorm * (maxTau - minTau);
+            return { ...h, tau };
+        });
+        g.setHiddenGrid(hiddenWithTau);
+
         this._node_coords = new Map(node_coords);
         for (const h of HIDDEN_GRID) {
             this._node_coords.set(h.id, { x: h.x, y: h.y, z: h.z });
@@ -240,10 +256,15 @@ class NNBrain extends Brain {
 
         const hidden_ids = HIDDEN_GRID.map(h => h.id);
         const pairs = [];
-        for (const src of input_ids) for (const dst of hidden_ids) pairs.push([src, dst]);
-        for (const src of input_ids) for (const dst of output_ids) pairs.push([src, dst]);
+        for (const src of input_ids)  for (const dst of hidden_ids) pairs.push([src, dst]);
+        for (const src of input_ids)  for (const dst of output_ids) pairs.push([src, dst]);
         for (const src of hidden_ids) for (const dst of output_ids) pairs.push([src, dst]);
+        // Recurrent / lateral substrate edges — the CPPN can express them
+        // (or not) on a per-pair basis via its LEO gate. Includes self-loops
+        // when src === dst; those act as per-hidden memory weights.
+        for (const src of hidden_ids) for (const dst of hidden_ids) pairs.push([src, dst]);
 
+        // ── Pass 2: query each substrate connection for weight + LEO ──────
         for (const [src, dst] of pairs) {
             const sc = this._node_coords.get(src);
             const dc = this._node_coords.get(dst);

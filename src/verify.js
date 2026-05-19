@@ -194,16 +194,16 @@ console.log('\n── NEAT structural mutations respect 1-hidden-layer rule (dir
     assert('a second add_node on a different I→O creates a 2nd hidden', !!hid && g.hiddens.length === 2);
 
     const h1 = g.hiddens[0].id, h2 = g.hiddens[1].id;
-    const illegal = g.addConnection(h1, h2, 0.5);
-    assert('hidden → hidden connection rejected', illegal === null);
+    const recurrent = g.addConnection(h1, h2, 0.5);
+    assert('hidden → hidden connection now ACCEPTED (recurrent)', !!recurrent);
 
-    // Self-loop rejection.
+    // Self-loop is also legal — acts as a per-hidden memory weight.
     const self = g.addConnection(h1, h1, 1.0);
-    assert('self-loop on hidden rejected', self === null);
+    assert('self-loop on hidden now ACCEPTED', !!self);
 
-    // Output → anything rejection.
+    // Output → anything still rejected (outputs are sinks).
     const fromOutput = g.addConnection(g.outputs[0], h1, 1.0);
-    assert('output as src rejected', fromOutput === null);
+    assert('output as src still rejected', fromOutput === null);
 })();
 
 // ─── Legacy two-layer save format backwards compatibility ───────────────────
@@ -285,8 +285,8 @@ console.log('\n── Phase 3: default brain uses CPPN encoding ──');
     assert('default encoding is "cppn"', org.brain.encoding === 'cppn');
     assert('CPPN is constructed',        org.brain.cppn instanceof CPPN);
     assert('CPPN starts with 0 hiddens', org.brain.cppn.numHiddenNodes() === 0);
-    assert('CPPN starts fully I→O connected (8 × 2 = 16)',
-           org.brain.cppn.numEnabledConnections() === 8 * 2);
+    assert('CPPN starts fully I→O connected (8 inputs × 3 outputs = 24)',
+           org.brain.cppn.numEnabledConnections() === 8 * 3);
 })();
 
 console.log('\n── Phase 3: substrate has fixed hidden grid ──');
@@ -672,15 +672,141 @@ console.log('\n── Phase 4: ctrnnEnabled=false bypasses the integrator ──
     }
 })();
 
-console.log('\n── Phase 4: HyperNEAT substrate uses ctrnnDefaultTau ──');
+console.log('\n── Phase 4+: HyperNEAT substrate τ comes from the CPPN ──');
 (function() {
     const org = newOrg();
     org.anatomy.addDefaultCell(CellStates.mouth, 0, 0);
     org.anatomy.addDefaultCell(CellStates.mover, 1, 0);
     org.anatomy.addDefaultCell(CellStates.eye,  -1, 0);
     const taus = org.brain.genome.hiddens.map(h => h.tau);
-    assert('all 4 hidden-grid nodes carry ctrnnDefaultTau=' + Hyperparams.ctrnnDefaultTau,
-           taus.length === 4 && taus.every(t => t === Hyperparams.ctrnnDefaultTau));
+    const minT = Hyperparams.ctrnnMinTau;
+    const maxT = Hyperparams.ctrnnMaxTau;
+    assert('all 4 hidden-grid nodes have τ in [ctrnnMinTau, ctrnnMaxTau]',
+           taus.length === 4 && taus.every(t => t >= minT - 1e-6 && t <= maxT + 1e-6));
+    // With bias→out:tau seeded at -0.5 → sigmoid(-0.5)≈0.378, but other
+    // weights from src_x/src_y/etc. are random gaussians and so for src===dst
+    // queries the inputs cancel partly; τ should land roughly in the middle
+    // third of the range for a fresh CPPN. Loose bound:
+    assert('fresh CPPN τ values are not pinned to a single extreme',
+           taus.some(t => t > minT + 0.5) && taus.some(t => t < maxT - 0.5));
+})();
+
+console.log('\n── Phase 4+: CPPN.query returns three outputs (weight, leo, tau) ──');
+(function() {
+    const c = new (require('./Organism/Perception/CPPN'))();
+    const q = c.query(0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7);
+    assert('query result has numeric weight', typeof q.weight === 'number');
+    assert('query result has numeric leo',    typeof q.leo    === 'number');
+    assert('query result has numeric tau',    typeof q.tau    === 'number');
+    assert('tau is a sigmoid output in (0, 1)', q.tau > 0 && q.tau < 1);
+})();
+
+// ─── Phase 4+: recurrent connections (hidden → hidden) ───────────────────
+console.log('\n── Phase 4+: hidden→hidden self-loop carries signal across ticks ──');
+(function() {
+    // Set up a direct-mode brain. Wipe all weights and add explicit edges:
+    //   FOOD_1 input  →  hidden  (weight 1)
+    //   hidden        →  hidden  (self-loop, weight 0.9)
+    //   hidden        →  output  (weight 1)
+    // Disable CTRNN so τ doesn't muddy the demonstration; the self-loop
+    // then acts as a pure delay-line accumulator.
+    const org = newOrg();
+    asDirect(org);
+    org.anatomy.addDefaultCell(CellStates.mouth, 0, 0);
+    org.anatomy.addDefaultCell(CellStates.mover, 1, 0);
+    org.anatomy.addDefaultCell(CellStates.eye,  -1, 0);
+    const g = org.brain.genome;
+    for (const c of g.connections) c.weight = 0;
+    g._compiled = null;
+    const FEAT_FOOD_1 = 2;
+    const ioConn = g.connections.find(c =>
+        c.src === `i:0:${FEAT_FOOD_1}` && c.dst === g.outputs[0]
+    );
+    const hid = g.addNodeOnConnection(ioConn);
+    const ih = g.connections.find(c => c.src === ioConn.src && c.dst === hid.id);
+    const ho = g.connections.find(c => c.src === hid.id     && c.dst === ioConn.dst);
+    ih.weight = 1.0; ho.weight = 1.0; hid.tau = 1.0;
+    const self = g.addConnection(hid.id, hid.id, 0.9);
+    assert('self-loop connection added successfully', !!self);
+    g._compiled = null;
+
+    const prevCtrnn = Hyperparams.ctrnnEnabled;
+    Hyperparams.ctrnnEnabled = false;
+    try {
+        const food = { state: CellStates.food, foodType: 1 };
+        const samples = [];
+        for (let t = 0; t < 6; t++) {
+            org.brain.observe(food, 1, 0, 0, 0, 0);
+            const { thrusts } = org.brain.decide();
+            samples.push(thrusts[0]);
+        }
+        // Self-loop weight=0.9 means each tick the hidden integrates 90% of
+        // its previous activation plus the fresh input — thrust must rise
+        // monotonically (saturating via tanh).
+        let monotonic = true;
+        for (let i = 1; i < samples.length; i++) {
+            if (samples[i] < samples[i - 1] - 1e-4) { monotonic = false; break; }
+        }
+        assert('thrust climbs monotonically across ticks via the self-loop', monotonic);
+        assert('first tick thrust is small (delay-line empty)', samples[0] < 0.85);
+        assert('later ticks larger than the first (recurrent gain)',
+               samples[samples.length - 1] > samples[0] + 0.01);
+    } finally {
+        Hyperparams.ctrnnEnabled = prevCtrnn;
+    }
+})();
+
+console.log('\n── Phase 4+: recurrent input is delayed by exactly one tick ──');
+(function() {
+    // Build a brain with H0→H1 lateral edge, no other recurrent edges. H1
+    // should receive its input from H0's PREVIOUS-tick activation. We pulse
+    // a one-tick food observation and check the result hits H1 on tick 2,
+    // not tick 1 (which proves the one-tick delay rather than instant feed).
+    const org = newOrg();
+    asDirect(org);
+    org.anatomy.addDefaultCell(CellStates.mouth, 0, 0);
+    org.anatomy.addDefaultCell(CellStates.mover, 1, 0);
+    org.anatomy.addDefaultCell(CellStates.eye,  -1, 0);
+    const g = org.brain.genome;
+    for (const c of g.connections) c.weight = 0;
+    g._compiled = null;
+
+    const FEAT_FOOD_1 = 2;
+    // Two add_nodes to create two hiddens H0, H1.
+    const ioA = g.connections.find(c =>
+        c.src === `i:0:${FEAT_FOOD_1}` && c.dst === g.outputs[0]
+    );
+    const H0 = g.addNodeOnConnection(ioA);
+    // Re-find another I→O connection for the second split.
+    const ioB = g.connections.find(c =>
+        c.enabled && c.src === "i:0:5" && c.dst === g.outputs[0]   // FEAT_WALL → out
+    );
+    const H1 = g.addNodeOnConnection(ioB);
+    // Wipe weights to zero, then craft the path: I(food1) → H0 → (recurrent w=1) → H1 → out.
+    for (const c of g.connections) c.weight = 0;
+    g.connections.find(c => c.src === `i:0:${FEAT_FOOD_1}` && c.dst === H0.id).weight = 1;
+    const rec = g.addConnection(H0.id, H1.id, 1.0);
+    assert('H0 → H1 recurrent connection added', !!rec);
+    g.connections.find(c => c.src === H1.id && c.dst === g.outputs[0]).weight = 1;
+    H0.tau = 1.0; H1.tau = 1.0;
+    g._compiled = null;
+
+    const prevCtrnn = Hyperparams.ctrnnEnabled;
+    Hyperparams.ctrnnEnabled = false;
+    try {
+        const food = { state: CellStates.food, foodType: 1 };
+        org.brain.observe(food, 1, 0, 0, 0, 0);
+        const t1 = org.brain.decide().thrusts[0];
+        // Stop showing food on tick 2 — but H1's input was H0's tick-1
+        // activation, so H1 (and the output) light up NOW.
+        org.brain.observe({ state: CellStates.empty }, 1, 0, 0, 0, 0);
+        const t2 = org.brain.decide().thrusts[0];
+        assert('tick 1: thrust near zero (recurrent edge hasn\'t propagated yet)',
+               Math.abs(t1) < 0.1);
+        assert('tick 2: thrust positive (last tick\'s H0 reaches H1)', t2 > 0.3);
+    } finally {
+        Hyperparams.ctrnnEnabled = prevCtrnn;
+    }
 })();
 
 console.log(`\n${'─'.repeat(48)}`);
