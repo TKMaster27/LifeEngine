@@ -33,7 +33,32 @@ const Hyperparams = {
         this.thrustDamping = 0.05;
         this.rotationalDamping = 0.1;
         this.nnMutationStrength = 0.1;
-        this.nnHiddenSize = 4;
+        this.nnHiddenSize = 4;   // legacy Phase-1 fixed-topology size; unused by NEAT
+        // ── NEAT structural-mutation probabilities (percent per mutate() call) ──
+        // These apply ONLY to "direct"-encoding brains (Phase 2 and earlier
+        // saves). Phase-3 organisms use the CPPN mutation probabilities below.
+        this.neatAddConnectionProb     = 5;
+        this.neatAddNodeProb           = 3;
+        this.neatDisableConnectionProb = 2;
+        // ── HyperNEAT / CPPN structural-mutation probabilities ──────────────
+        this.cppnAddConnectionProb     = 5;
+        this.cppnAddNodeProb           = 3;
+        this.cppnMutateActivationProb  = 4;
+        this.cppnDisableConnectionProb = 1;
+        // Strength of the diet-aware seeding prior added on top of CPPN-
+        // generated substrate weights. 1.0 reproduces the Phase-2 prior
+        // magnitudes (food-in-diet = +1.0, killer = -1.0, empty = +0.35).
+        // Lower this if you want the CPPN to dominate behavior earlier;
+        // 0 disables seeding entirely.
+        this.cppnSeedPriorStrength     = 1.0;
+        // ── CTRNN dynamics (Phase 4) ───────────────────────────────────────
+        // When enabled, each substrate hidden node carries membrane-potential
+        // state across ticks giving the network "thought momentum". τ = 1
+        // collapses to feedforward; τ > 1 introduces a leaky integrator.
+        this.ctrnnEnabled              = true;
+        this.ctrnnDt                   = 1.0;   // one simulation tick per integration step
+        this.ctrnnDefaultTau           = 2.0;   // α = dt/τ = 0.5 — half new sum, half old state
+        this.ctrnnMinTau               = 1.0;   // clamp so α never exceeds 1 (numerically stable)
 
         this.foodDropProb = 0;
         this.altFoodTypeChance = 0.0;

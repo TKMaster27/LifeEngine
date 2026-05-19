@@ -141,8 +141,31 @@ def plot_diet_population(records, ax):
                "Diet Specialisation (population)", "Number of organisms")
 
 
+def plot_brain_complexity(records, ax):
+    """NEAT topology growth: avg enabled connections + avg hidden nodes per organism."""
+    ticks = records["tick_record"]
+    conns  = records.get("av_connections")
+    hidden = records.get("av_hidden_nodes")
+    if not conns and not hidden:
+        ax.set_title("Brain Complexity (no data — pre-Phase 2 run?)")
+        return
+    if conns:
+        ax.plot(ticks, conns, color="#1f77ff", lw=1.5, label="Avg. enabled connections")
+    if hidden:
+        # Different y-magnitude; use a secondary axis so both are readable.
+        ax2 = ax.twinx()
+        ax2.plot(ticks, hidden, color="#FF69B4", lw=1.4, label="Avg. hidden nodes")
+        ax2.set_ylabel("Avg. hidden nodes", color="#FF69B4")
+        ax2.tick_params(axis='y', labelcolor="#FF69B4")
+    ax.set_title("Brain Complexity (NEAT topology)")
+    ax.set_xlabel("Ticks")
+    ax.set_ylabel("Avg. enabled connections", color="#1f77ff")
+    ax.tick_params(axis='y', labelcolor="#1f77ff")
+    ax.grid(alpha=0.3)
+
+
 def make_summary_figure(records, title: str):
-    fig, axes = plt.subplots(3, 2, figsize=(14, 12))
+    fig, axes = plt.subplots(4, 2, figsize=(14, 16))
     fig.suptitle(title, fontsize=14, fontweight="bold")
     plot_population(records,         axes[0, 0])
     plot_species(records,            axes[0, 1])
@@ -150,6 +173,8 @@ def make_summary_figure(records, title: str):
     plot_cells(records,              axes[1, 1])
     plot_diet_species(records,       axes[2, 0])
     plot_diet_population(records,    axes[2, 1])
+    plot_brain_complexity(records,   axes[3, 0])
+    axes[3, 1].axis("off")
     fig.tight_layout(rect=(0, 0, 1, 0.97))
     return fig
 
@@ -189,6 +214,7 @@ def main():
         ("cells.png",                     plot_cells),
         ("diet_species.png",              plot_diet_species),
         ("diet_population.png",           plot_diet_population),
+        ("brain_complexity.png",          plot_brain_complexity),
     ]
     for filename, plotter in panels:
         f, ax = plt.subplots(figsize=(8, 5))

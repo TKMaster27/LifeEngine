@@ -443,10 +443,12 @@ class EditorController extends CanvasController{
         brainMaps.empty();
         $('#brain-editor-controls').remove();
 
-        const n_eyes   = brain.eye_cell_count;
-        const n_hidden = brain.n_hidden;
-        const n_movers = brain.n_outputs;
-        const n_weights = brain.w1.length + brain.w2.length;
+        const genome = brain && brain.genome;
+        if (!genome) {
+            brainInfo.html('<h2>Neural Brain</h2><p>No genome on this organism.</p>');
+            this.updateBrainSummary();
+            return;
+        }
 
         const FEATURE_NAMES = [
             'empty','food0','food1','food2','food3',
@@ -454,37 +456,68 @@ class EditorController extends CanvasController{
             'mover','killer','armor','eye',
             'dist','dx','dy'
         ];
+        const INPUTS_PER_EYE = FEATURE_NAMES.length;
+
+        const inputs   = genome.inputs;
+        const outputs  = genome.outputs;
+        const hiddens  = genome.hiddens;
+        const conns    = genome.connections;
+        const n_eyes   = brain.eye_cell_count || (inputs.length / INPUTS_PER_EYE) | 0;
+        const n_hidden = hiddens.length;
+        const n_movers = outputs.length;
+        const n_enabled  = conns.filter(c => c.enabled).length;
+        const n_disabled = conns.length - n_enabled;
 
         brainInfo.html(`
-            <h2>Neural Brain</h2>
-            <p style="margin:2px 0">Eyes: ${n_eyes} &nbsp; Hidden: ${n_hidden} &nbsp; Movers: ${n_movers} &nbsp; Weights: ${n_weights}</p>
-            <p style="margin:2px 0;font-size:11px;color:#aaa">W1: inputs→hidden &nbsp;|&nbsp; W2: hidden→outputs</p>
+            <h2>Neural Brain (NEAT)</h2>
+            <p style="margin:2px 0">Eyes: ${n_eyes} &nbsp; Hidden: ${n_hidden} &nbsp; Movers: ${n_movers}</p>
+            <p style="margin:2px 0;font-size:11px;color:#aaa">Connections: ${n_enabled} enabled, ${n_disabled} disabled</p>
         `);
 
-        if (n_eyes === 0 || n_movers === 0 || n_hidden === 0) {
-            brainMaps.html('<p>No weights yet.</p>');
+        if (inputs.length === 0 || n_movers === 0) {
+            brainMaps.html('<p>No inputs and/or outputs yet — add an eye and a mover.</p>');
             this.updateBrainSummary();
             return;
         }
 
-        function weightCell(w) {
+        // Build effective weight matrices from enabled connections. Disabled
+        // entries display as 0 with a slightly different cell tint (no entry).
+        // weightAt(src_id, dst_id) returns either a {weight, enabled} pair or null.
+        const lookup = new Map();
+        for (const c of conns) {
+            lookup.set(c.src + "|" + c.dst, c);
+        }
+        const connAt = (src, dst) => lookup.get(src + "|" + dst) || null;
+
+        function weightCell(c) {
+            if (!c) {
+                return `<td title="no connection" style="background:#1a1a1a;width:22px;height:14px;font-size:9px;text-align:center;color:#444">·</td>`;
+            }
+            const w = c.weight;
             const mag = Math.min(1, Math.abs(w) / 2);
             const r = w < 0 ? Math.round(180 * mag) : 0;
             const g = w > 0 ? Math.round(180 * mag) : 0;
-            return `<td title="${w.toFixed(3)}" style="background:rgb(${r},${g},0);width:18px;height:14px;font-size:9px;text-align:center;color:#eee">${w.toFixed(1)}</td>`;
+            const opacity = c.enabled ? 1.0 : 0.35;
+            return `<td title="${w.toFixed(3)}${c.enabled ? '' : ' (disabled)'}" style="background:rgba(${r},${g},0,${opacity});width:22px;height:14px;font-size:9px;text-align:center;color:#eee">${w.toFixed(1)}</td>`;
         }
 
         function activationCell(v) {
             const mag = Math.min(1, Math.abs(v));
             const r = v < 0 ? Math.round(200 * mag) : 0;
             const g = v > 0 ? Math.round(200 * mag) : 0;
-            return `<td title="${v.toFixed(3)}" style="background:rgb(${r},${g},0);width:18px;height:14px;font-size:9px;text-align:center;color:#eee;border:1px solid #555">${v.toFixed(2)}</td>`;
+            return `<td title="${v.toFixed(3)}" style="background:rgb(${r},${g},0);width:22px;height:14px;font-size:9px;text-align:center;color:#eee;border:1px solid #555">${v.toFixed(2)}</td>`;
         }
 
-        // Current activations (from last tick — or zeros if organism hasn't acted yet)
+        // Pull activations from the compiled forward-pass buffer (zeros until
+        // the organism has ticked at least once).
+        const compiled = genome._compiled;
+        const activations = compiled ? compiled.activations : null;
+        const hidden_offset = compiled ? compiled.hidden_offset : 0;
+
         let hiddenActRow = '';
         for (let h = 0; h < n_hidden; h++) {
-            hiddenActRow += activationCell(brain.hidden_buffer[h] || 0);
+            const v = activations ? activations[hidden_offset + h] : 0;
+            hiddenActRow += activationCell(v || 0);
         }
         let thrustActRow = '';
         for (let j = 0; j < n_movers; j++) {
@@ -493,55 +526,95 @@ class EditorController extends CanvasController{
         }
 
         const actStyle = 'border-collapse:collapse;font-family:monospace;margin-bottom:2px';
-        const actSection = `
-            <p style="margin:4px 0 1px;font-size:11px;font-weight:bold;color:#ccc">Activations (last tick)</p>
-            <table style="${actStyle}">
-                <tr><td style="font-size:10px;padding:1px 4px;white-space:nowrap;color:#aaa">hidden</td>${hiddenActRow}</tr>
-                <tr><td style="font-size:10px;padding:1px 4px;white-space:nowrap;color:#aaa">thrust</td>${thrustActRow}</tr>
-            </table>
-        `;
+        const actSection = n_hidden > 0
+            ? `
+                <p style="margin:4px 0 1px;font-size:11px;font-weight:bold;color:#ccc">Activations (last tick)</p>
+                <table style="${actStyle}">
+                    <tr><td style="font-size:10px;padding:1px 4px;white-space:nowrap;color:#aaa">hidden</td>${hiddenActRow}</tr>
+                    <tr><td style="font-size:10px;padding:1px 4px;white-space:nowrap;color:#aaa">thrust</td>${thrustActRow}</tr>
+                </table>
+              `
+            : `
+                <p style="margin:4px 0 1px;font-size:11px;font-weight:bold;color:#ccc">Thrust (last tick)</p>
+                <table style="${actStyle}">
+                    <tr><td style="font-size:10px;padding:1px 4px;white-space:nowrap;color:#aaa">thrust</td>${thrustActRow}</tr>
+                </table>
+              `;
 
-        // W1 table: rows = inputs (eye × feature), cols = hidden neurons
-        let w1Header = '<tr><th style="font-size:10px;padding:1px 3px">In \\ H</th>';
-        for (let h = 0; h < n_hidden; h++) w1Header += `<th style="font-size:10px;padding:1px 3px">H${h}</th>`;
-        w1Header += '</tr>';
+        const tableStyle = 'border-collapse:collapse;font-family:monospace';
 
-        let w1Rows = '';
-        for (let e = 0; e < n_eyes; e++) {
-            for (let f = 0; f < FEATURE_NAMES.length; f++) {
-                const i = e * FEATURE_NAMES.length + f;
-                if (i >= brain.n_inputs) break;
-                const label = n_eyes > 1 ? `E${e}·${FEATURE_NAMES[f]}` : FEATURE_NAMES[f];
-                w1Rows += `<tr><td style="font-size:10px;padding:1px 3px;white-space:nowrap">${label}</td>`;
+        const inputLabel = (i) => {
+            const e = (i / INPUTS_PER_EYE) | 0;
+            const f =  i % INPUTS_PER_EYE;
+            return n_eyes > 1 ? `E${e}·${FEATURE_NAMES[f]}` : FEATURE_NAMES[f];
+        };
+
+        // W1 table: input → hidden  (only shown if at least one hidden node exists)
+        let w1Section = '';
+        if (n_hidden > 0) {
+            let w1Header = '<tr><th style="font-size:10px;padding:1px 3px">In \\ H</th>';
+            for (let h = 0; h < n_hidden; h++) {
+                w1Header += `<th title="${hiddens[h].id}" style="font-size:10px;padding:1px 3px">H${h}</th>`;
+            }
+            w1Header += '</tr>';
+            let w1Rows = '';
+            for (let i = 0; i < inputs.length; i++) {
+                w1Rows += `<tr><td style="font-size:10px;padding:1px 3px;white-space:nowrap">${inputLabel(i)}</td>`;
                 for (let h = 0; h < n_hidden; h++) {
-                    w1Rows += weightCell(brain.w1[i * n_hidden + h]);
+                    w1Rows += weightCell(connAt(inputs[i], hiddens[h].id));
                 }
                 w1Rows += '</tr>';
             }
+            w1Section = `
+                <p style="margin:2px 0 1px;font-size:11px;font-weight:bold;color:#ccc">Input → Hidden</p>
+                <table style="${tableStyle}">${w1Header}${w1Rows}</table>
+            `;
         }
 
-        // W2 table: rows = hidden neurons, cols = movers
-        let w2Header = '<tr><th style="font-size:10px;padding:1px 3px">H \\ Out</th>';
-        for (let j = 0; j < n_movers; j++) w2Header += `<th style="font-size:10px;padding:1px 3px">M${j}</th>`;
-        w2Header += '</tr>';
-
-        let w2Rows = '';
-        for (let h = 0; h < n_hidden; h++) {
-            w2Rows += `<tr><td style="font-size:10px;padding:1px 3px">H${h}</td>`;
-            for (let j = 0; j < n_movers; j++) {
-                w2Rows += weightCell(brain.w2[h * n_movers + j]);
+        // W2 table: hidden → output
+        let w2Section = '';
+        if (n_hidden > 0) {
+            let w2Header = '<tr><th style="font-size:10px;padding:1px 3px">H \\ Out</th>';
+            for (let j = 0; j < n_movers; j++) w2Header += `<th style="font-size:10px;padding:1px 3px">M${j}</th>`;
+            w2Header += '</tr>';
+            let w2Rows = '';
+            for (let h = 0; h < n_hidden; h++) {
+                w2Rows += `<tr><td title="${hiddens[h].id}" style="font-size:10px;padding:1px 3px">H${h}</td>`;
+                for (let j = 0; j < n_movers; j++) {
+                    w2Rows += weightCell(connAt(hiddens[h].id, outputs[j]));
+                }
+                w2Rows += '</tr>';
             }
-            w2Rows += '</tr>';
+            w2Section = `
+                <p style="margin:6px 0 1px;font-size:11px;font-weight:bold;color:#ccc">Hidden → Output</p>
+                <table style="${tableStyle}">${w2Header}${w2Rows}</table>
+            `;
         }
 
-        const tableStyle = 'border-collapse:collapse;font-family:monospace';
+        // Skip table: direct input → output connections (always shown — the
+        // pure-NEAT minimal initial topology lives entirely here).
+        let skipHeader = '<tr><th style="font-size:10px;padding:1px 3px">In \\ Out</th>';
+        for (let j = 0; j < n_movers; j++) skipHeader += `<th style="font-size:10px;padding:1px 3px">M${j}</th>`;
+        skipHeader += '</tr>';
+        let skipRows = '';
+        for (let i = 0; i < inputs.length; i++) {
+            skipRows += `<tr><td style="font-size:10px;padding:1px 3px;white-space:nowrap">${inputLabel(i)}</td>`;
+            for (let j = 0; j < n_movers; j++) {
+                skipRows += weightCell(connAt(inputs[i], outputs[j]));
+            }
+            skipRows += '</tr>';
+        }
+        const skipSection = `
+            <p style="margin:6px 0 1px;font-size:11px;font-weight:bold;color:#ccc">Input → Output (skip / direct)</p>
+            <table style="${tableStyle}">${skipHeader}${skipRows}</table>
+        `;
+
         brainMaps.html(`
             <div style="overflow:auto;max-height:400px;margin-top:4px">
                 ${actSection}
-                <p style="margin:2px 0 1px;font-size:11px;font-weight:bold;color:#ccc">W1 — input → hidden</p>
-                <table style="${tableStyle}">${w1Header}${w1Rows}</table>
-                <p style="margin:6px 0 1px;font-size:11px;font-weight:bold;color:#ccc">W2 — hidden → output</p>
-                <table style="${tableStyle}">${w2Header}${w2Rows}</table>
+                ${w1Section}
+                ${w2Section}
+                ${skipSection}
             </div>
         `);
 

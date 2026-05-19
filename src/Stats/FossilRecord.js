@@ -84,6 +84,8 @@ const FossilRecord = {
         this.av_cell_counts = [];
         this.species_diet_counts = [];
         this.population_diet_counts = [];
+        this.av_connections = [];     // NEAT: avg enabled connections per organism
+        this.av_hidden_nodes = [];    // NEAT: avg hidden nodes per organism
         // full-history arrays (never shifted; written to disk on serialize for post-run analysis)
         this.full_tick_record = [];
         this.full_pop_counts = [];
@@ -93,6 +95,8 @@ const FossilRecord = {
         this.full_av_cell_counts = [];
         this.full_species_diet_counts = [];
         this.full_population_diet_counts = [];
+        this.full_av_connections = [];
+        this.full_av_hidden_nodes = [];
         this.updateData();
     },
 
@@ -105,6 +109,7 @@ const FossilRecord = {
         this.species_diet_counts.push(this.calcDietSpecializationCounts());
         this.population_diet_counts.push(this.calcPopulationDietCounts());
         this.calcCellCountAverages();
+        this.calcBrainAverages();
         // mirror the just-pushed values into the full-history arrays before any shift.
         const last = this.tick_record.length - 1;
         this.full_tick_record.push(this.tick_record[last]);
@@ -115,6 +120,8 @@ const FossilRecord = {
         this.full_av_cell_counts.push(this.av_cell_counts[last]);
         this.full_species_diet_counts.push(this.species_diet_counts[last]);
         this.full_population_diet_counts.push(this.population_diet_counts[last]);
+        this.full_av_connections.push(this.av_connections[last]);
+        this.full_av_hidden_nodes.push(this.av_hidden_nodes[last]);
         while (this.tick_record.length > this.record_size_limit) {
             this.tick_record.shift();
             this.pop_counts.shift();
@@ -124,7 +131,26 @@ const FossilRecord = {
             this.av_cell_counts.shift();
             this.species_diet_counts.shift();
             this.population_diet_counts.shift();
+            this.av_connections.shift();
+            this.av_hidden_nodes.shift();
         }
+    },
+
+    /** Average enabled-connection count and hidden-node count across all
+     *  living organisms with a NEAT-style genome. Organisms with the legacy
+     *  Phase-1 brain (or no brain at all) are skipped, so this is a valid
+     *  proxy for "topology growth since Phase 2 kicked in". */
+    calcBrainAverages() {
+        let n = 0, total_conns = 0, total_hidden = 0;
+        for (const org of this.env.organisms) {
+            const g = org.brain && org.brain.genome;
+            if (!g) continue;
+            total_conns  += g.numEnabledConnections();
+            total_hidden += g.numHiddenNodes();
+            n++;
+        }
+        this.av_connections.push(n > 0 ? total_conns  / n : 0);
+        this.av_hidden_nodes.push(n > 0 ? total_hidden / n : 0);
     },
 
         calcDietSpecializationCounts() {
@@ -253,6 +279,8 @@ const FossilRecord = {
             av_cell_counts:this.full_av_cell_counts,
             species_diet_counts: this.full_species_diet_counts,
             population_diet_counts: this.full_population_diet_counts,
+            av_connections:  this.full_av_connections,
+            av_hidden_nodes: this.full_av_hidden_nodes,
         };
         // Sliding-window snapshot the in-browser charts were using, kept around
         // for any consumer that explicitly wants the last record_size_limit ticks.
@@ -265,6 +293,8 @@ const FossilRecord = {
             av_cell_counts:this.av_cell_counts,
             species_diet_counts: this.species_diet_counts,
             population_diet_counts: this.population_diet_counts,
+            av_connections:  this.av_connections,
+            av_hidden_nodes: this.av_hidden_nodes,
         };
         let species = {};
         for (let s of Object.values(this.extant_species)) {

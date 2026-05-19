@@ -1,5 +1,6 @@
 #!/bin/bash
 #PBS -N life_engine
+#PBS -P CSCI1142
 #PBS -l walltime=24:00:00
 #PBS -l nodes=1:ppn=1
 #PBS -l mem=4gb
@@ -22,10 +23,10 @@ CELL_SIZE=4                # pixel size of each cell (default 4)
 LOG_EVERY=10000            # print progress every N ticks
 
 # Path to the Node 16 binary installed via nvm
-NODE_BIN=""
+NODE_BIN="/home/tmackay/.nvm/versions/node/v16.20.2/bin/node"
 
 # Project root (absolute path)
-PROJECT_DIR=""
+PROJECT_DIR="/home/tmackay/LifeEngine"
 
 # ─── Environment setup ────────────────────────────────────────────────────────
 
