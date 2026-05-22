@@ -303,8 +303,9 @@ class Organism {
 
             let fx = 0, fy = 0, torque = 0;
             let mover_idx = 0;
-            for (const m of this.anatomy.cells) {
-                if (m.state !== CellStates.mover) continue;
+            const movers = this.anatomy.mover_cells;
+            for (let i = 0; i < movers.length; i++) {
+                const m = movers[i];
                 const thrust = (thrusts && thrusts[mover_idx] != null) ? thrusts[mover_idx] : 0;
                 // Linear thrust applied in world frame.
                 const [ux, uy] = Directions.scalars[m.getAbsoluteDirection()];

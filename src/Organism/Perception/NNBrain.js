@@ -138,46 +138,51 @@ class NNBrain extends Brain {
     /** Collect the set of food type IDs this organism's mouth cells eat. */
     _getDietSet() {
         const diet = new Set();
-        for (const c of this.owner.anatomy.cells) {
-            if (c.state === CellStates.mouth && typeof c.diet === 'number') {
-                diet.add(c.diet);
-            }
+        const mouths = this.owner.anatomy.mouth_cells || [];
+        for (let i = 0; i < mouths.length; i++) {
+            const c = mouths[i];
+            if (typeof c.diet === 'number') diet.add(c.diet);
         }
         return diet;
     }
 
-    /** Walk anatomy.cells producing the canonical input/output id lists plus
-     *  per-node substrate coordinates. The order must match EyeCell.look()'s
-     *  eye_index numbering and the mover-index numbering used by
-     *  Organism.update(). */
+    /** Walk anatomy.eye_cells / .mover_cells producing canonical input/output
+     *  id lists plus per-node substrate coordinates. eye_cells and
+     *  mover_cells preserve cell-insertion order, which keeps eye_index
+     *  numbering aligned with EyeCell.look() and mover_index aligned with
+     *  Organism.update()'s thrust loop. */
     _anatomyIO(excludeCell) {
         const input_ids   = [];
         const output_ids  = [];
         const node_coords = new Map();
+        const anatomy = this.owner.anatomy;
+        const eyes   = anatomy.eye_cells   || [];
+        const movers = anatomy.mover_cells || [];
         let n_eyes = 0, n_movers = 0;
-        for (const c of this.owner.anatomy.cells) {
+        for (let i = 0; i < eyes.length; i++) {
+            const c = eyes[i];
             if (c === excludeCell) continue;
-            if (c.state === CellStates.eye) {
-                const x = c.loc_col / COORD_SCALE;
-                const y = c.loc_row / COORD_SCALE;
-                for (let f = 0; f < INPUTS_PER_EYE; f++) {
-                    const id = inputId(n_eyes, f);
-                    input_ids.push(id);
-                    // Feature index normalised to [-1, 1].
-                    const z = (f / (INPUTS_PER_EYE - 1)) * 2 - 1;
-                    node_coords.set(id, { x, y, z });
-                }
-                n_eyes++;
-            } else if (c.state === CellStates.mover) {
-                const id = outputId(n_movers);
-                output_ids.push(id);
-                node_coords.set(id, {
-                    x: c.loc_col / COORD_SCALE,
-                    y: c.loc_row / COORD_SCALE,
-                    z: 0,
-                });
-                n_movers++;
+            const x = c.loc_col / COORD_SCALE;
+            const y = c.loc_row / COORD_SCALE;
+            for (let f = 0; f < INPUTS_PER_EYE; f++) {
+                const id = inputId(n_eyes, f);
+                input_ids.push(id);
+                const z = (f / (INPUTS_PER_EYE - 1)) * 2 - 1;
+                node_coords.set(id, { x, y, z });
             }
+            n_eyes++;
+        }
+        for (let i = 0; i < movers.length; i++) {
+            const c = movers[i];
+            if (c === excludeCell) continue;
+            const id = outputId(n_movers);
+            output_ids.push(id);
+            node_coords.set(id, {
+                x: c.loc_col / COORD_SCALE,
+                y: c.loc_row / COORD_SCALE,
+                z: 0,
+            });
+            n_movers++;
         }
         return { input_ids, output_ids, node_coords, n_eyes, n_movers };
     }
@@ -334,13 +339,22 @@ class NNBrain extends Brain {
 
     decide() {
         const n_out = this.genome.outputs.length;
-        const thrusts = new Float32Array(n_out);
+        // Reuse the persistent last_thrusts buffer instead of allocating a
+        // fresh Float32Array every tick. buildSubstrate() resizes it when
+        // n_out changes, so it's guaranteed to be the right length here.
+        // We still need to clear it in case the substrate has zero inputs
+        // or no movers (no forward pass would write to it).
+        let thrusts = this.last_thrusts;
+        if (thrusts.length !== n_out) {
+            thrusts = this.last_thrusts = new Float32Array(n_out);
+        } else {
+            thrusts.fill(0);
+        }
         if (this.obs_buffer.length > 0 && n_out > 0) {
             const out = this.genome.forward(this.obs_buffer);
             for (let i = 0; i < n_out; i++) thrusts[i] = out[i];
         }
         this.obs_buffer.fill(0);
-        this.last_thrusts = thrusts;
         return { thrusts };
     }
 
@@ -352,9 +366,12 @@ class NNBrain extends Brain {
         }
 
         // Mover direction mutation (same in both encodings — it's anatomical,
-        // not part of the brain).
-        for (const cell of this.owner.anatomy.cells) {
-            if (cell.state === CellStates.mover && Math.random() < 0.1) {
+        // not part of the brain). Iterate the pre-indexed mover list so we
+        // don't scan every anatomy cell with a state predicate.
+        const movers = this.owner.anatomy.mover_cells || [];
+        for (let i = 0; i < movers.length; i++) {
+            if (Math.random() < 0.1) {
+                const cell = movers[i];
                 cell.direction = (cell.direction + (Math.random() < 0.5 ? 1 : 3)) % 4;
             }
         }
@@ -563,10 +580,7 @@ class NNBrain extends Brain {
     get independent_eye_decisions() { return false; }
     get decisions()  { return []; }
     countCells() {
-        this.eye_cell_count = 0;
-        for (const c of this.owner.anatomy.cells) {
-            if (c.state === CellStates.eye) this.eye_cell_count++;
-        }
+        this.eye_cell_count = (this.owner.anatomy.eye_cells || []).length;
     }
     setIndependentEyeDecisions() {}
     newBrainState() {}
