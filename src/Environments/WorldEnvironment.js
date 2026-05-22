@@ -223,6 +223,9 @@ class WorldEnvironment extends Environment{
         this.clearDeadOrganisms();
         let env = SerializeHelper.copyNonObjects(this);
         env.grid = this.grid_map.serialize();
+        // foodType lives on the EmitterCell, not on the grid cell, so emitters
+        // are serialized here from the authoritative list rather than in GridMap.
+        env.grid.emitters = this.emitters.map(e => ({ c: e.col, r: e.row, t: e.foodType }));
         env.organisms = [];
         for (let org of this.organisms){
             env.organisms.push(org.serialize());
