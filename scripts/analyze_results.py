@@ -7,6 +7,7 @@ Reproduces the same charts shown in the web browser StatsPanel:
   - Average organism size + per-cell-type breakdown
   - Diet specialisation (species)
   - Diet specialisation (population)
+  - Per-species population over time (lines coloured by diet)
 
 Usage:
     uv run scripts/analyze_results.py [results.json] [--out out_dir]
@@ -14,6 +15,7 @@ Usage:
 
 import argparse
 import json
+import math
 import sys
 from pathlib import Path
 
@@ -141,6 +143,59 @@ def plot_diet_population(records, ax):
                "Diet Specialisation (population)", "Number of organisms")
 
 
+def _diet_key(mouth_diets):
+    """Map a species' mouth_diets array to one of the DIET_COLOURS keys."""
+    if not mouth_diets:
+        return "none"
+    if len(mouth_diets) > 1:
+        return "generalist"
+    d = mouth_diets[0]
+    if d in (0, 1, 2, 3):
+        return f"type{d}_only"
+    return "none"
+
+
+def plot_species_populations(records, species_diets, ax):
+    """One line per species (filtered to pop > 10 at the JS side), coloured by diet.
+
+    NaN is used where a species is below the threshold so matplotlib leaves a
+    gap rather than dropping the line to zero.
+    """
+    ticks = records["tick_record"]
+    pops_by_tick = records.get("species_populations") or []
+    # Tolerate null/None entries: pre-fix runs that load+continue from an
+    # older save wrote `null` placeholders instead of {}.
+    pops_by_tick = [s if isinstance(s, dict) else {} for s in pops_by_tick]
+    if not pops_by_tick:
+        ax.set_title("Species Populations (no data — older results file)")
+        return
+    all_names = set()
+    for snap in pops_by_tick:
+        all_names.update(snap.keys())
+    if not all_names:
+        ax.set_title("Species Populations (no species crossed pop > 10)")
+        ax.set_xlabel("Ticks")
+        ax.set_ylabel("Population")
+        ax.grid(alpha=0.3)
+        return
+    legend_seen = set()
+    for name in sorted(all_names):
+        ys = [snap.get(name, math.nan) for snap in pops_by_tick]
+        key = _diet_key(species_diets.get(name, []))
+        colour = DIET_COLOURS[key]
+        if key in legend_seen:
+            label = None
+        else:
+            legend_seen.add(key)
+            label = DIET_LABELS[key]
+        ax.plot(ticks, ys, color=colour, lw=1.0, alpha=0.7, label=label)
+    ax.set_title(f"Species Populations (pop > 10, n={len(all_names)} species)")
+    ax.set_xlabel("Ticks")
+    ax.set_ylabel("Population")
+    ax.legend(loc="upper left", fontsize=8)
+    ax.grid(alpha=0.3)
+
+
 def plot_brain_complexity(records, ax):
     """NEAT topology growth: avg enabled connections + avg hidden nodes per organism."""
     ticks = records["tick_record"]
@@ -164,17 +219,17 @@ def plot_brain_complexity(records, ax):
     ax.grid(alpha=0.3)
 
 
-def make_summary_figure(records, title: str):
+def make_summary_figure(records, species_diets, title: str):
     fig, axes = plt.subplots(4, 2, figsize=(14, 16))
     fig.suptitle(title, fontsize=14, fontweight="bold")
-    plot_population(records,         axes[0, 0])
-    plot_species(records,            axes[0, 1])
-    plot_mutation(records,           axes[1, 0])
-    plot_cells(records,              axes[1, 1])
-    plot_diet_species(records,       axes[2, 0])
-    plot_diet_population(records,    axes[2, 1])
-    plot_brain_complexity(records,   axes[3, 0])
-    axes[3, 1].axis("off")
+    plot_population(records,                       axes[0, 0])
+    plot_species(records,                          axes[0, 1])
+    plot_mutation(records,                         axes[1, 0])
+    plot_cells(records,                            axes[1, 1])
+    plot_diet_species(records,                     axes[2, 0])
+    plot_diet_population(records,                  axes[2, 1])
+    plot_brain_complexity(records,                 axes[3, 0])
+    plot_species_populations(records, species_diets, axes[3, 1])
     fig.tight_layout(rect=(0, 0, 1, 0.97))
     return fig
 
@@ -189,6 +244,7 @@ def main():
     results_path = Path(args.results)
     data = load_results(results_path)
     records = _trim((data["fossil_record"])["records"])
+    species_diets = (data.get("fossil_record") or {}).get("species_diets") or {}
 
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -201,7 +257,7 @@ def main():
     title = f"{results_path.name}  —  {status}  —  final pop {final_pop}, species {final_spec}"
 
     # one combined dashboard
-    fig = make_summary_figure(records, title)
+    fig = make_summary_figure(records, species_diets, title)
     combined_path = out_dir / "summary.png"
     fig.savefig(combined_path, dpi=130)
     print(f"[plots] wrote {combined_path}")
@@ -224,6 +280,16 @@ def main():
         f.savefig(path, dpi=130)
         plt.close(f)
         print(f"[plots] wrote {path}")
+
+    # species population chart needs the species_diets sidecar, so it doesn't fit
+    # the (records, ax) shape used by the loop above.
+    f, ax = plt.subplots(figsize=(10, 6))
+    plot_species_populations(records, species_diets, ax)
+    f.tight_layout()
+    path = out_dir / "species_populations.png"
+    f.savefig(path, dpi=130)
+    plt.close(f)
+    print(f"[plots] wrote {path}")
 
     if args.show:
         plt.show()
