@@ -20,6 +20,10 @@ const FossilRecord = {
 
     addSpecies: function(org, ancestor) {
         var new_species = new Species(org.anatomy, ancestor, this.env.total_ticks);
+        // capture founder brain weights for post-run analysis
+        if (org.brain && typeof org.brain.serialize === 'function') {
+            new_species.founder_brain = org.brain.serialize();
+        }
         this.extant_species[new_species.name] = new_species;
         org.species = new_species;
         return new_species;
@@ -56,11 +60,10 @@ const FossilRecord = {
         species.end_tick = this.env.total_ticks;
         species.ancestor = undefined; // garbage collect ancestors
         delete this.extant_species[species.name];
-        if (species.cumulative_pop >= this.min_discard) {
-            // TODO: store as extinct species
-            return true;
-        }
-        return false;
+        // Always retain extinct species so their founder_brain survives extinction.
+        // min_discard is still used elsewhere to filter sparse species out of averages.
+        this.extinct_species[species.name] = species;
+        return species.cumulative_pop >= this.min_discard;
     },
 
     resurrect: function(species) {
@@ -72,7 +75,7 @@ const FossilRecord = {
     },
 
     setData() {
-        // all parallel arrays
+        // sliding-window arrays (capped at record_size_limit; used by the live in-browser charts)
         this.tick_record = [];
         this.pop_counts = [];
         this.species_counts = [];
@@ -81,6 +84,21 @@ const FossilRecord = {
         this.av_cell_counts = [];
         this.species_diet_counts = [];
         this.population_diet_counts = [];
+        this.av_connections = [];     // NEAT: avg enabled connections per organism
+        this.av_hidden_nodes = [];    // NEAT: avg hidden nodes per organism
+        this.species_populations = [];  // per-tick {species_name: population} for species with pop > 10
+        // full-history arrays (never shifted; written to disk on serialize for post-run analysis)
+        this.full_tick_record = [];
+        this.full_pop_counts = [];
+        this.full_species_counts = [];
+        this.full_av_mut_rates = [];
+        this.full_av_cells = [];
+        this.full_av_cell_counts = [];
+        this.full_species_diet_counts = [];
+        this.full_population_diet_counts = [];
+        this.full_av_connections = [];
+        this.full_av_hidden_nodes = [];
+        this.full_species_populations = [];
         this.updateData();
     },
 
@@ -92,7 +110,24 @@ const FossilRecord = {
         this.av_mut_rates.push(this.env.averageMutability());
         this.species_diet_counts.push(this.calcDietSpecializationCounts());
         this.population_diet_counts.push(this.calcPopulationDietCounts());
+        const species_pops_snap = this.calcSpeciesPopulations();
+        this.species_populations.push(species_pops_snap);
         this.calcCellCountAverages();
+        this.calcBrainAverages();
+        // mirror the just-pushed values into the full-history arrays before any shift.
+        // Use each array's own last index — they may not all have the same length
+        // after loading an older save where some series are missing or short.
+        this.full_tick_record.push(this.tick_record[this.tick_record.length - 1]);
+        this.full_pop_counts.push(this.pop_counts[this.pop_counts.length - 1]);
+        this.full_species_counts.push(this.species_counts[this.species_counts.length - 1]);
+        this.full_av_mut_rates.push(this.av_mut_rates[this.av_mut_rates.length - 1]);
+        this.full_av_cells.push(this.av_cells[this.av_cells.length - 1]);
+        this.full_av_cell_counts.push(this.av_cell_counts[this.av_cell_counts.length - 1]);
+        this.full_species_diet_counts.push(this.species_diet_counts[this.species_diet_counts.length - 1]);
+        this.full_population_diet_counts.push(this.population_diet_counts[this.population_diet_counts.length - 1]);
+        this.full_av_connections.push(this.av_connections[this.av_connections.length - 1]);
+        this.full_av_hidden_nodes.push(this.av_hidden_nodes[this.av_hidden_nodes.length - 1]);
+        this.full_species_populations.push(species_pops_snap);
         while (this.tick_record.length > this.record_size_limit) {
             this.tick_record.shift();
             this.pop_counts.shift();
@@ -102,7 +137,39 @@ const FossilRecord = {
             this.av_cell_counts.shift();
             this.species_diet_counts.shift();
             this.population_diet_counts.shift();
+            this.av_connections.shift();
+            this.av_hidden_nodes.shift();
+            this.species_populations.shift();
         }
+    },
+
+    // Per-species population snapshot, filtered to species with pop > 10 to
+    // exclude transient lineages and keep the on-disk record compact.
+    calcSpeciesPopulations() {
+        const pops = {};
+        for (let s of Object.values(this.extant_species)) {
+            if (s.population > 10) {
+                pops[s.name] = s.population;
+            }
+        }
+        return pops;
+    },
+
+    /** Average enabled-connection count and hidden-node count across all
+     *  living organisms with a NEAT-style genome. Organisms with the legacy
+     *  Phase-1 brain (or no brain at all) are skipped, so this is a valid
+     *  proxy for "topology growth since Phase 2 kicked in". */
+    calcBrainAverages() {
+        let n = 0, total_conns = 0, total_hidden = 0;
+        for (const org of this.env.organisms) {
+            const g = org.brain && org.brain.genome;
+            if (!g) continue;
+            total_conns  += g.numEnabledConnections();
+            total_hidden += g.numHiddenNodes();
+            n++;
+        }
+        this.av_connections.push(n > 0 ? total_conns  / n : 0);
+        this.av_hidden_nodes.push(n > 0 ? total_hidden / n : 0);
     },
 
         calcDietSpecializationCounts() {
@@ -221,7 +288,23 @@ const FossilRecord = {
     serialize() {
         this.updateData();
         let record = SerializeHelper.copyNonObjects(this);
+        // Full history from tick 0 — the canonical record_size-unbounded data.
         record.records = {
+            tick_record:this.full_tick_record,
+            pop_counts:this.full_pop_counts,
+            species_counts:this.full_species_counts,
+            av_mut_rates:this.full_av_mut_rates,
+            av_cells:this.full_av_cells,
+            av_cell_counts:this.full_av_cell_counts,
+            species_diet_counts: this.full_species_diet_counts,
+            population_diet_counts: this.full_population_diet_counts,
+            av_connections:  this.full_av_connections,
+            av_hidden_nodes: this.full_av_hidden_nodes,
+            species_populations: this.full_species_populations,
+        };
+        // Sliding-window snapshot the in-browser charts were using, kept around
+        // for any consumer that explicitly wants the last record_size_limit ticks.
+        record.window_records = {
             tick_record:this.tick_record,
             pop_counts:this.pop_counts,
             species_counts:this.species_counts,
@@ -230,21 +313,87 @@ const FossilRecord = {
             av_cell_counts:this.av_cell_counts,
             species_diet_counts: this.species_diet_counts,
             population_diet_counts: this.population_diet_counts,
+            av_connections:  this.av_connections,
+            av_hidden_nodes: this.av_hidden_nodes,
+            species_populations: this.species_populations,
         };
         let species = {};
         for (let s of Object.values(this.extant_species)) {
             species[s.name] = SerializeHelper.copyNonObjects(s);
-            delete species[s.name].name; // the name will be used as the key, so remove it from the value
+            delete species[s.name].name;
+            if (s.founder_brain) species[s.name].founder_brain = s.founder_brain;
+            species[s.name].mouth_diets = s.mouth_diets || [];
         }
         record.species = species;
+        // Diet metadata for every species that ever appeared in species_populations
+        // (including ones that went extinct before the run ended), so the analyzer
+        // can colour each line by diet without losing extinct lineages.
+        const viable_names = new Set();
+        for (let snap of this.full_species_populations) {
+            for (let name in snap) viable_names.add(name);
+        }
+        const species_diets = {};
+        const all_species = Object.values(this.extant_species).concat(Object.values(this.extinct_species));
+        for (let s of all_species) {
+            if (viable_names.has(s.name)) {
+                species_diets[s.name] = s.mouth_diets || [];
+            }
+        }
+        record.species_diets = species_diets;
         return record;
+    },
+
+    // Returns founder brains ranked by cumulative population, best first.
+    // Useful for identifying which starting weights produced stable lineages.
+    exportFounderBrainsRanked: function() {
+        const combined = Object.values(this.extant_species)
+            .concat(Object.values(this.extinct_species))
+            .filter(s => s.founder_brain)
+            .sort((a, b) => b.cumulative_pop - a.cumulative_pop);
+        return combined.map(s => ({
+            species:        s.name,
+            extinct:        !!s.extinct,
+            start_tick:     s.start_tick,
+            end_tick:       s.end_tick,
+            cumulative_pop: s.cumulative_pop,
+            mouth_diets:    s.mouth_diets,
+            cell_counts:    s.cell_counts,
+            founder_brain:  s.founder_brain,
+        }));
     },
 
     loadRaw(record) {
         SerializeHelper.overwriteNonObjects(record, this);
-        for (let key in record.records) {
-            this[key] = record.records[key];
+        // `records` now holds full history (post-change). Mirror it into both the
+        // sliding window and the full-history arrays so loading a freshly-saved
+        // file works correctly even though the window will be re-shifted on the
+        // next updateData() call.
+        if (record.records) {
+            for (let key in record.records) {
+                this[key] = record.records[key];
+                this['full_' + key] = (record.records[key] || []).slice();
+            }
         }
+        // Older saves wrote only sliding-window data into `records` and have no
+        // full history. Newer saves include both for back-compat with downstream
+        // tools — prefer the explicit window_records when present.
+        if (record.window_records) {
+            for (let key in record.window_records) {
+                this[key] = record.window_records[key];
+            }
+        }
+        // Normalise species_populations to match tick_record length. Files saved
+        // by the buggy early version of this code had nulls / wrong lengths;
+        // without this, the mismatch propagates through every subsequent save.
+        const targetLen = (this.tick_record || []).length;
+        const normalise = (arr) => {
+            const out = (arr || []).map(s => (s && typeof s === 'object') ? s : {});
+            while (out.length < targetLen) out.push({});
+            if (out.length > targetLen) out.length = targetLen;
+            return out;
+        };
+        this.species_populations = normalise(this.species_populations);
+        this.full_species_populations = normalise(this.full_species_populations);
     },
 
     exportSpeciesDietCountsCSV() {

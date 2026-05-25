@@ -16,6 +16,7 @@ class Species {
         this.end_tick = -1;
         this.name = Math.random().toString(36).substr(2, 10);
         this.extinct = false;
+        this.founder_brain = null; // set by FossilRecord.addSpecies from the founding organism
         this.calcAnatomyDetails();
     }
 

@@ -315,6 +315,18 @@ input:hover,input:active {
     height: 50px;
     margin: 1px;
 }
+.mouth-type {
+    background: black;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.mouth-dot {
+    width: 14px;
+    height: 14px;
+    border-radius: 2px;
+    display: inline-block;
+}
 #editor-mode-cont{
     padding-top: 20px;
 }

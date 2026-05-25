@@ -3,7 +3,7 @@ const Neighbors = require("../Grid/Neighbors");
 const Hyperparams = require("../Hyperparameters");
 const Directions = require("./Directions");
 const Anatomy = require("./Anatomy");
-const Brain = require("./Perception/Brain");
+const NNBrain = require("./Perception/NNBrain");
 const FossilRecord = require("../Stats/FossilRecord");
 const SerializeHelper = require("../Utils/SerializeHelper");
 
@@ -15,32 +15,29 @@ class Organism {
         this.lifetime = 0;
         this.food_collected = 0;
         this.living = true;
-        this.anatomy = new Anatomy(this)
-        this.direction = Directions.down; // direction of movement
-        this.rotation = Directions.up; // direction of rotation
-        this.move_count = 0;
-        this.move_range = 4;
-        this.ignore_brain_for = 0;
+        this.anatomy = new Anatomy(this);
+        this.rotation = Directions.up;
         this.mutability = 5;
         this.damage = 0;
-        this.brain = new Brain(this);
+        // continuous movement accumulators for thrust+torque locomotion
+        this.vx = 0;
+        this.vy = 0;
+        this.omega = 0;
+        this.brain = new NNBrain(this);
         if (parent != null) {
             this.inherit(parent);
         }
     }
 
     inherit(parent) {
-        this.move_range = parent.move_range;
         this.mutability = parent.mutability;
         this.species = parent.species;
         for (var c of parent.anatomy.cells){
-            //deep copy parent cells
             this.anatomy.addInheritCell(c);
         }
         this.brain.copy(parent.brain);
     }
 
-    // amount of food required before it can reproduce
     foodNeeded() {
         return this.anatomy.is_mover ? this.anatomy.cells.length + Hyperparams.extraMoverFoodCost : this.anatomy.cells.length;
     }
@@ -54,26 +51,21 @@ class Organism {
     }
 
     reproduce() {
-        //produce mutated child
-        //check nearby locations (is there room and a direct path)
         var org = new Organism(0, 0, this.env, this);
-        if(Hyperparams.rotationEnabled){
-            org.rotation = Directions.getRandomDirection();
-        }
+        org.rotation = Directions.getRandomDirection();
         var prob = this.mutability;
         if (Hyperparams.useGlobalMutability){
             prob = Hyperparams.globalMutability;
         }
         else {
-            //mutate the mutability
             if (Math.random() <= 0.5)
                 org.mutability++;
-            else{ 
+            else{
                 org.mutability--;
                 if (org.mutability < 1)
                     org.mutability = 1;
             }
-        } 
+        }
         var mutated = false;
         if (this.calcRandomChance(prob)) {
             mutated = org.mutate();
@@ -87,8 +79,8 @@ class Organism {
         var new_c = this.c + (direction_c*basemovement) + (direction_c*offset);
         var new_r = this.r + (direction_r*basemovement) + (direction_r*offset);
 
-        if (org.isClear(new_c, new_r, org.rotation, true) && 
-            org.isStraightPath(new_c, new_r, this.c, this.r, this) && 
+        if (org.isClear(new_c, new_r, org.rotation, true) &&
+            org.isStraightPath(new_c, new_r, this.c, this.r, this) &&
             this.env.canAddOrganism())
         {
             org.c = new_c;
@@ -111,7 +103,7 @@ class Organism {
         let removed = false;
         if (this.calcRandomChance(Hyperparams.addProb)) {
             let branch = this.anatomy.getRandomCell();
-            let state = CellStates.getRandomLivingType(); // branch.state;
+            let state = CellStates.getRandomLivingType();
             let growth_direction = Neighbors.all[Math.floor(Math.random() * Neighbors.all.length)];
             let c = branch.loc_col + growth_direction[0];
             let r = branch.loc_row + growth_direction[1];
@@ -119,28 +111,21 @@ class Organism {
                 added = true;
                 this.anatomy.addRandomizedCell(state, c, r);
 
-                // attempt symmetrical mutations across horizontal, vertical, and both diagonal axes
                 const axes = ['h', 'v', 'd'];
                 for (let axis of axes) {
                     if (this.calcRandomChance(Hyperparams.mutationSymmetryChance)) {
                         let mc = c;
                         let mr = r;
                         switch (axis) {
-                            case 'h': // horizontal symmetry (mirror over x-axis)
+                            case 'h':
                                 mr = -r;
-                                if (r === 0) {
-                                    mr = c;
-                                    mc = -r;
-                                }
+                                if (r === 0) { mr = c; mc = -r; }
                                 break;
-                            case 'v': // vertical symmetry (mirror over y-axis)
+                            case 'v':
                                 mc = -c;
-                                if (c === 0) {
-                                    mr = -c;
-                                    mc = r;
-                                }
+                                if (c === 0) { mr = -c; mc = r; }
                                 break;
-                            case 'd': // diagonal symmetry (mirror over both axes)
+                            case 'd':
                                 mc = -c;
                                 mr = -r;
                                 break;
@@ -154,7 +139,6 @@ class Organism {
         }
         if (this.calcRandomChance(Hyperparams.changeProb)){
             let cell = this.anatomy.getRandomCell();
-            // Mutate the mouth diet directly if we happen to randomly mutate a mouth cell
             if (cell.state === CellStates.mouth && this.calcRandomChance(50)) {
                 cell.diet = Hyperparams.getRandomFoodTypeId();
                 changed = true;
@@ -170,16 +154,11 @@ class Organism {
                 removed = this.anatomy.removeCell(cell.loc_col, cell.loc_row);
             }
         }
-        if (this.anatomy.is_mover && this.calcRandomChance(Hyperparams.brainMutationChance)) { 
+        if (this.anatomy.is_mover && this.calcRandomChance(Hyperparams.brainMutationChance)) {
             if (this.anatomy.has_eyes) {
                 this.brain.mutate();
             }
-            this.move_range += Math.floor(Math.random() * 4) - 2;
-            if (this.move_range <= 0){
-                this.move_range = 1;
-            };
         }
-        // return true if a new species is created, which is only true for anatomy changes, not brain changes
         return added || changed || removed;
     }
 
@@ -187,12 +166,9 @@ class Organism {
         return (Math.random() * 100) < prob;
     }
 
-    attemptMove() {
-        var direction = Directions.scalars[this.direction];
-        var direction_c = direction[0];
-        var direction_r = direction[1];
-        var new_c = this.c + direction_c;
-        var new_r = this.r + direction_r;
+    attemptMove(dc, dr) {
+        var new_c = this.c + dc;
+        var new_r = this.r + dr;
         if (this.isClear(new_c, new_r)) {
             for (var cell of this.anatomy.cells) {
                 var real_c = this.c + cell.rotatedCol(this.rotation);
@@ -208,11 +184,6 @@ class Organism {
     }
 
     attemptRotate(rotation=null) {
-        if(!Hyperparams.rotationEnabled){
-            this.direction = Directions.getRandomDirection();
-            this.move_count = 0;
-            return true;
-        }
         if(rotation == null){
             rotation = Directions.getRandomDirection();
         }
@@ -223,46 +194,26 @@ class Organism {
                 this.env.changeCell(real_c, real_r, CellStates.empty, null);
             }
             this.rotation = rotation;
-            this.direction = Directions.getRandomDirection();
             this.updateGrid();
-            this.move_count = 0;
             return true;
         }
         return false;
     }
 
-    changeDirection(dir) {
-        this.direction = dir;
-        this.move_count = 0;
-    }
-
-    // assumes either c1==c2 or r1==r2, returns true if there is a clear path from point 1 to 2
     isStraightPath(c1, r1, c2, r2, parent){
         if (c1 == c2) {
-            if (r1 > r2){
-                var temp = r2;
-                r2 = r1;
-                r1 = temp;
-            }
+            if (r1 > r2){ var temp = r2; r2 = r1; r1 = temp; }
             for (var i=r1; i!=r2; i++) {
                 var cell = this.env.grid_map.cellAt(c1, i)
-                if (!this.isPassableCell(cell, parent)){
-                    return false;
-                }
+                if (!this.isPassableCell(cell, parent)){ return false; }
             }
             return true;
         }
         else {
-            if (c1 > c2){
-                var temp = c2;
-                c2 = c1;
-                c1 = temp;
-            }
+            if (c1 > c2){ var temp = c2; c2 = c1; c1 = temp; }
             for (var i=c1; i!=c2; i++) {
                 var cell = this.env.grid_map.cellAt(i, r1);
-                if (!this.isPassableCell(cell, parent)){
-                    return false;
-                }
+                if (!this.isPassableCell(cell, parent)){ return false; }
             }
             return true;
         }
@@ -275,9 +226,7 @@ class Organism {
     isClear(col, row, rotation=this.rotation) {
         for(var loccell of this.anatomy.cells) {
             var cell = this.getRealCell(loccell, col, row, rotation);
-            if (cell==null) {
-                return false;
-            }
+            if (cell==null) { return false; }
             if (cell.owner==this || cell.state==CellStates.empty || (!Hyperparams.foodBlocksReproduction && cell.state==CellStates.food)){
                 continue;
             }
@@ -293,9 +242,7 @@ class Organism {
                 diets.add(cell.diet);
             }
         }
-
-        // consumming multiple food types means complicated digestive system and less resources consumed
-        return diets.size > 1 ? 1/ Math.sqrt(diets.size) : 1.0;
+        return diets.size > 1 ? 1 / diets.size : 1.0;
     }
 
     getEdibleFoodTypes() {
@@ -348,65 +295,53 @@ class Organism {
         for (var cell of this.anatomy.cells) {
             cell.performFunction();
             if (!this.living)
-                return this.living
+                return this.living;
         }
-        
+
         if (this.anatomy.is_mover) {
-            const Decision = Brain.Decision;
-            let brain_decision = Decision.neutral;
-            let brain_direction = 0;
-            if (this.anatomy.has_eyes) {
-                let {decision, move_direction} = this.brain.decide();
-                brain_decision = decision;
-                brain_direction = move_direction;
+            const { thrusts } = this.brain.decide();
+
+            let fx = 0, fy = 0, torque = 0;
+            let mover_idx = 0;
+            const movers = this.anatomy.mover_cells;
+            for (let i = 0; i < movers.length; i++) {
+                const m = movers[i];
+                const thrust = (thrusts && thrusts[mover_idx] != null) ? thrusts[mover_idx] : 0;
+                // Linear thrust applied in world frame.
+                const [ux, uy] = Directions.scalars[m.getAbsoluteDirection()];
+                fx += thrust * ux;
+                fy += thrust * uy;
+                // Torque computed entirely in body frame so the moment arm is
+                // rotation-invariant: an asymmetric body produces the same
+                // turning behaviour regardless of its current world rotation.
+                const [bx, by] = Directions.scalars[m.direction];
+                torque += m.loc_col * (thrust * by) - m.loc_row * (thrust * bx);
+                mover_idx++;
             }
-            let dontmove = false;
-            switch (brain_decision) {
-                case Decision.neutral:
-                    // move move_range times, then randomly rotate/change direction
-                    if (this.move_count > this.move_range) {
-                        this.attemptRotate();
-                        this.changeDirection(Directions.getRandomDirection());
-                        this.move_count = 0;
-                    }
-                    break;
-                case Decision.chase:
-                    this.changeDirection(brain_direction);
-                    break;
-                case Decision.retreat:
-                    this.changeDirection(Directions.getOppositeDirection(brain_direction));
-                    break;
-                case Decision.move_left:
-                    this.changeDirection(Directions.getLeftDirection(brain_direction));
-                    break;
-                case Decision.move_right:
-                    this.changeDirection(Directions.getRightDirection(brain_direction));
-                    break;
-                case Decision.turn_left:
-                    // rotate left based on current rotation, brain direction irrelavent
-                    this.attemptRotate(Directions.getLeftDirection(this.rotation));
-                    dontmove = true;
-                    break;
-                case Decision.turn_right:
-                    this.attemptRotate(Directions.getRightDirection(this.rotation));
-                    dontmove = true;
-                    break;
-                case Decision.stop:
-                    dontmove = true;
-                    break;
+
+            const td = Hyperparams.thrustDamping;
+            const rd = Hyperparams.rotationalDamping;
+            this.vx = (this.vx + fx) * (1 - td);
+            this.vy = (this.vy + fy) * (1 - td);
+            this.omega = (this.omega + torque) * (1 - rd);
+
+            if (Math.abs(this.vx) >= 1) {
+                const step = Math.sign(this.vx);
+                if (this.attemptMove(step, 0)) this.vx -= step;
+                else this.vx = 0;
             }
-            if (!dontmove) {
-                let moved = this.attemptMove();
-                if (!moved) {
-                    // if stuck, try to rotate or change direction
-                    let rotated = this.attemptRotate();
-                    if (!rotated) {
-                        this.changeDirection(Directions.getRandomDirection());
-                    }
-                }
-                else {
-                    this.move_count++;
-                }
+            if (Math.abs(this.vy) >= 1) {
+                const step = Math.sign(this.vy);
+                if (this.attemptMove(0, step)) this.vy -= step;
+                else this.vy = 0;
+            }
+            if (Math.abs(this.omega) >= Math.PI / 2) {
+                const step = Math.sign(this.omega);
+                const new_rot = step > 0
+                    ? Directions.getRightDirection(this.rotation)
+                    : Directions.getLeftDirection(this.rotation);
+                if (this.attemptRotate(new_rot)) this.omega -= step * Math.PI / 2;
+                else this.omega = 0;
             }
         }
         return this.living;
@@ -420,9 +355,7 @@ class Organism {
 
     isNatural() {
         let found_center = false;
-        if (this.anatomy.cells.length === 0) {
-            return false;
-        }
+        if (this.anatomy.cells.length === 0) { return false; }
         for (let i=0; i<this.anatomy.cells.length; i++) {
             let cell = this.anatomy.cells[i];
             for (let j=i+1; j<this.anatomy.cells.length; j++) {
@@ -449,11 +382,16 @@ class Organism {
 
     loadRaw(org) {
         SerializeHelper.overwriteNonObjects(org, this);
-        this.anatomy.loadRaw(org.anatomy)
-        if (org.brain)
-            this.brain.copy(org.brain)
+        this.anatomy.loadRaw(org.anatomy);
+        if (org.brain) {
+            this.brain.loadRaw(org.brain);
+        } else if (this.brain instanceof NNBrain) {
+            // anatomy.loadRaw uses addInheritCell which deliberately skips
+            // brain notifications, so the substrate is still empty here.
+            // Force a rebuild so anatomy and brain stay in sync.
+            this.brain.buildSubstrate();
+        }
     }
-
 }
 
 module.exports = Organism;

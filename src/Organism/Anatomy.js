@@ -11,9 +11,53 @@ class Anatomy {
 
     clear() {
         this.cells = [];
+        // Cells indexed by type — maintained alongside this.cells so the
+        // hot per-tick loops (mover thrust integration, eye observation,
+        // mouth eating, diet lookup, etc.) iterate a pre-filtered array
+        // instead of scanning all cells with a state predicate each tick.
+        // Rebuilt by _indexAllCells() after any add/remove. Keep these in
+        // sync with the switch in _indexAllCells if cell types are added.
+        this.eye_cells      = [];
+        this.mover_cells    = [];
+        this.mouth_cells    = [];
+        this.producer_cells = [];
+        this.killer_cells   = [];
+        this.armor_cells    = [];
         this.is_producer = false;
         this.is_mover = false;
         this.has_eyes = false;
+    }
+
+    /** Rebuild the type-indexed cell arrays and stamp each cell with its
+     *  position inside its type list (`cell._type_index`). Called after any
+     *  structural change to the anatomy. O(n) per call, but cell add/remove
+     *  is rare (~one event per reproduction) so this stays off the hot path. */
+    _indexAllCells() {
+        this.eye_cells.length      = 0;
+        this.mover_cells.length    = 0;
+        this.mouth_cells.length    = 0;
+        this.producer_cells.length = 0;
+        this.killer_cells.length   = 0;
+        this.armor_cells.length    = 0;
+        for (const cell of this.cells) {
+            const name = cell.state && cell.state.name;
+            let arr = null;
+            switch (name) {
+                case 'eye':      arr = this.eye_cells;      break;
+                case 'mover':    arr = this.mover_cells;    break;
+                case 'mouth':    arr = this.mouth_cells;    break;
+                case 'producer': arr = this.producer_cells; break;
+                case 'killer':   arr = this.killer_cells;   break;
+                case 'armor':    arr = this.armor_cells;    break;
+                default: break;
+            }
+            if (arr) {
+                cell._type_index = arr.length;
+                arr.push(cell);
+            } else {
+                cell._type_index = -1;
+            }
+        }
     }
 
     canAddCellAt(c, r) {
@@ -28,6 +72,7 @@ class Anatomy {
     addDefaultCell(state, c, r) {
         var new_cell = BodyCellFactory.createDefault(this.owner, state, c, r);
         this.cells.push(new_cell);
+        this._indexAllCells();
         this.owner.brain.checkAddedCell(new_cell);
         return new_cell;
     }
@@ -35,6 +80,7 @@ class Anatomy {
     addRandomizedCell(state, c, r) {
         var new_cell = BodyCellFactory.createRandom(this.owner, state, c, r);
         this.cells.push(new_cell);
+        this._indexAllCells();
         this.owner.brain.checkAddedCell(new_cell);
         return new_cell;
     }
@@ -42,6 +88,7 @@ class Anatomy {
     addInheritCell(parent_cell) {
         var new_cell = BodyCellFactory.createInherited(this.owner, parent_cell);
         this.cells.push(new_cell);
+        this._indexAllCells();
         return new_cell;
     }
 
@@ -66,6 +113,7 @@ class Anatomy {
                 break;
             }
         }
+        this._indexAllCells();
         this.checkTypeChange();
         return true;
     }

@@ -346,9 +346,6 @@ class ControlPanel {
             Hyperparams.lifespanMultiplier = $('#lifespan-multiplier').val();
         }.bind(this));
 
-        $('#rot-enabled').change(function() {
-            Hyperparams.rotationEnabled = this.checked;
-        });
         $('#insta-kill').change(function() {
             Hyperparams.instaKill = this.checked;
         });
@@ -360,9 +357,6 @@ class ControlPanel {
         });
         $('#see-through-self').change(function() {
             Hyperparams.seeThroughSelf = this.checked;
-        });
-        $('#independent-eye-decisions').change(function() {
-            Hyperparams.evolveIndependentEyeDecisions = this.checked;
         });
         $('#food-drop-rate').change(function() {
             Hyperparams.foodDropProb = $('#food-drop-rate').val();
@@ -462,7 +456,6 @@ class ControlPanel {
         $('#food-prod-prob').val(Hyperparams.foodProdProb);
         $('#emitter-prod-prob').val(Hyperparams.emitterProdProb);
         $('#lifespan-multiplier').val(Hyperparams.lifespanMultiplier);
-        $('#rot-enabled').prop('checked', Hyperparams.rotationEnabled);
         $('#insta-kill').prop('checked', Hyperparams.instaKill);
         $('#dead-turn-to-food').prop('checked', Hyperparams.deadTurnToFood);
         $('#evolved-mutation').prop('checked', !Hyperparams.useGlobalMutability);
@@ -481,7 +474,6 @@ class ControlPanel {
         $('#look-range').val(Hyperparams.lookRange);
         $('#see-through-self').prop('checked', Hyperparams.seeThroughSelf);
         $('#global-mutation').val(Hyperparams.globalMutability);
-        $('#independent-eye-decisions').prop('checked', Hyperparams.evolveIndependentEyeDecisions);
         
         if (!Hyperparams.useGlobalMutability) {
             $('.global-mutation-container').css('display', 'none');

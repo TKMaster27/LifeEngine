@@ -11,9 +11,8 @@ class EyeCell extends BodyCell{
     }
 
     initInherit(parent) {
-        // deep copy parent values
         super.initInherit(parent);
-        this.direction = parent.direction;
+        this.direction = (parent.direction !== undefined) ? parent.direction : Directions.up;
     }
     
     initRandom() {
@@ -61,8 +60,13 @@ class EyeCell extends BodyCell{
         var maxCol = map.cols;
         var maxRow = map.rows;
 
-        let my_eye_index = 0;
-        if (this.org.brain.independent_eye_decisions) {
+        // Anatomy keeps eyes in their cell-order in `eye_cells` and stamps
+        // each cell with its position there as `_type_index`. Fall back to
+        // a linear search if (for any reason) the index wasn't set — keeps
+        // editor-side dynamic cells working when they bypass Anatomy.
+        let my_eye_index = this._type_index;
+        if (my_eye_index == null || my_eye_index < 0) {
+            my_eye_index = 0;
             for (let c of this.org.anatomy.cells) {
                 if (c.state.name === CellStates.eye.name) {
                     if (c === this) break;
@@ -87,12 +91,12 @@ class EyeCell extends BodyCell{
 
             if (cell.state !== CellStates.empty) {
                 var distance = Math.abs(start_col-col) + Math.abs(start_row-row);
-                this.org.brain.observe(cell, distance, direction, my_eye_index);
+                this.org.brain.observe(cell, distance, direction, my_eye_index, col - start_col, row - start_row);
                 return;
             }
         }
 
-        this.org.brain.observe(cell, Hyperparams.lookRange, direction, my_eye_index);
+        this.org.brain.observe(cell, Hyperparams.lookRange, direction, my_eye_index, 0, 0);
     }
 }
 

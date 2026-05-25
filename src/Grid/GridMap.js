@@ -89,20 +89,17 @@ class GridMap {
     serialize() {
         // Rather than store every single cell, we will store non organism cells (food+walls)
         // and assume everything else is empty. Organism cells will be set when the organism
-        // list is loaded. This reduces filesize and complexity.
+        // list is loaded. This reduces filesize and complexity. Emitters are serialized by
+        // WorldEnvironment.serialize() since foodType lives on the EmitterCell, not the grid.
         let grid = {cell_size:this.cell_size, cols:this.cols, rows:this.rows};
         grid.food = [];
         grid.walls = [];
         for (let col of this.grid) {
             for (let cell of col) {
-                if (cell.state===CellStates.wall || cell.state===CellStates.food){
-                    let c = {c: cell.col, r: cell.row, t: cell.foodType, n: cell.nutrition}; // no need to store state
-                    if (cell.state===CellStates.food)
-                        grid.food.push(c)
-                    else if (cell.state===CellStates.emitter)
-                        grid.emitters.push(c);
-                    else
-                        grid.walls.push(c)
+                if (cell.state===CellStates.food) {
+                    grid.food.push({c: cell.col, r: cell.row, t: cell.foodType, n: cell.nutrition});
+                } else if (cell.state===CellStates.wall) {
+                    grid.walls.push({c: cell.col, r: cell.row});
                 }
             }
         }
