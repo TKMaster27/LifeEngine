@@ -10,6 +10,11 @@ const FossilRecord = {
         // if an organism has fewer than this cumulative pop, discard them on extinction
         this.min_discard = 10;
 
+        // min cumulative_pop required for a species (and its founder brain) to be kept
+        // when serialize() writes JSON to disk. Independent of min_discard so changing
+        // it does not affect live stats like calcCellCountAverages. null = no filter.
+        this.min_serialize_keep = null;
+
         this.record_size_limit = 500; // store this many data points
     },
 
@@ -317,8 +322,19 @@ const FossilRecord = {
             av_hidden_nodes: this.av_hidden_nodes,
             species_populations: this.species_populations,
         };
+        const keep_threshold = this.min_serialize_keep;
         let species = {};
-        for (let s of Object.values(this.extant_species)) {
+        // Keep all extant species (they may yet grow), plus extinct species that
+        // cleared the threshold. Extant species below the threshold are still
+        // written because they are part of the current live world state.
+        const survivors = Object.values(this.extant_species);
+        const extinct_kept = (keep_threshold == null)
+            ? []
+            : Object.values(this.extinct_species).filter(s => (s.cumulative_pop || 0) >= keep_threshold);
+        const to_serialize = (keep_threshold == null)
+            ? survivors
+            : survivors.concat(extinct_kept);
+        for (let s of to_serialize) {
             species[s.name] = SerializeHelper.copyNonObjects(s);
             delete species[s.name].name;
             if (s.founder_brain) species[s.name].founder_brain = s.founder_brain;
@@ -346,9 +362,11 @@ const FossilRecord = {
     // Returns founder brains ranked by cumulative population, best first.
     // Useful for identifying which starting weights produced stable lineages.
     exportFounderBrainsRanked: function() {
+        const keep_threshold = this.min_serialize_keep;
         const combined = Object.values(this.extant_species)
             .concat(Object.values(this.extinct_species))
             .filter(s => s.founder_brain)
+            .filter(s => keep_threshold == null || (s.cumulative_pop || 0) >= keep_threshold)
             .sort((a, b) => b.cumulative_pop - a.cumulative_pop);
         return combined.map(s => ({
             species:        s.name,
