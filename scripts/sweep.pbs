@@ -1,0 +1,134 @@
+#!/bin/bash
+# ─────────────────────────────────────────────────────────────────────────────
+# CHPC PBS script — runs one environment with N seeds in PARALLEL.
+#
+# Usage (one job per environment):
+#   qsub -v CONFIG=Experiment1_Base.json,SEEDS="1 2 3 4 5",MAX_TICKS=10000000 scripts/sweep.pbs
+#   qsub -v CONFIG=experiment_2_allopatric.json,SEEDS="1 2 3 4 5",MAX_TICKS=10000000 scripts/sweep.pbs
+#   qsub -v CONFIG=experiment_3_archipelago.json,SEEDS="1 2 3 4 5",MAX_TICKS=10000000 scripts/sweep.pbs
+#   qsub -v CONFIG=Islands.json,SEEDS="1 2 3 4 5",MAX_TICKS=10000000 scripts/sweep.pbs
+#
+# To run sequentially instead of in parallel (e.g. if you can only get 1 core):
+#   qsub -v CONFIG=Experiment1_Base.json,SEEDS="1 2 3 4 5",MODE=sequential scripts/sweep.pbs
+# and change the #PBS -l select line to ncpus=1.
+#
+# All seeds for one env land in results/<env_name>/seed_<N>.json. Existing
+# outputs are skipped — re-submitting after a crash resumes the remaining seeds.
+# ─────────────────────────────────────────────────────────────────────────────
+
+#PBS -N life_sweep
+#PBS -P CSCI1142
+#PBS -l walltime=06:00:00
+#PBS -l select=1:ncpus=5:mem=8gb
+#PBS -q normal
+#PBS -o logs/sweep_${PBS_JOBID}.out
+#PBS -e logs/sweep_${PBS_JOBID}.err
+#PBS -m abe
+#PBS -M tariquemackay@gmail.com
+
+# ─── Defaults (overridable via -v at qsub time) ──────────────────────────────
+: "${CONFIG:?must pass -v CONFIG=<env.json>}"
+: "${SEEDS:=1 2 3 4 5}"
+: "${MAX_TICKS:=10000000}"
+: "${DATA_RATE:=1000}"
+: "${KEEP_MIN:=50}"
+: "${LOG_EVERY:=100000}"
+: "${MODE:=parallel}"             # parallel | sequential
+
+# ─── Paths (edit these to match your CHPC home) ──────────────────────────────
+NODE_BIN="/home/tmackay/.nvm/versions/node/v16.20.2/bin/node"
+PROJECT_DIR="/home/tmackay/LifeEngine"
+
+# ─── Job info ────────────────────────────────────────────────────────────────
+echo "=== Job info ==="
+echo "Job ID:        $PBS_JOBID"
+echo "Node:          $(hostname)"
+echo "Date:          $(date)"
+echo "Config:        $CONFIG"
+echo "Seeds:         $SEEDS"
+echo "Max ticks:     $MAX_TICKS"
+echo "Data rate:     $DATA_RATE"
+echo "Keep-min:      $KEEP_MIN"
+echo "Mode:          $MODE"
+echo ""
+
+cd "$PROJECT_DIR" || { echo "ERROR: Cannot cd to $PROJECT_DIR"; exit 1; }
+mkdir -p logs
+
+if [ ! -x "$NODE_BIN" ]; then
+    echo "ERROR: Node binary not found at $NODE_BIN"; exit 1
+fi
+if [ ! -f "$CONFIG" ]; then
+    echo "ERROR: Config file '$CONFIG' not found in $PROJECT_DIR"; exit 1
+fi
+
+# Derive a clean env name from the config file (strip path + .json)
+ENV_NAME="$(basename "$CONFIG" .json)"
+OUT_DIR="results/${ENV_NAME}"
+mkdir -p "$OUT_DIR"
+echo "Output dir:    $OUT_DIR"
+echo ""
+
+# ─── Per-seed runner ─────────────────────────────────────────────────────────
+run_seed() {
+    local SEED=$1
+    local OUT="${OUT_DIR}/seed_${SEED}.json"
+    local WORLD="${OUT_DIR}/seed_${SEED}_world.json"
+    local SEED_LOG="logs/${ENV_NAME}_seed_${SEED}_${PBS_JOBID}.log"
+
+    if [ -f "$OUT" ]; then
+        echo "[seed $SEED] SKIP — $OUT already exists"
+        return 0
+    fi
+
+    echo "[seed $SEED] start → $OUT (log: $SEED_LOG)"
+    "$NODE_BIN" src/headless.js \
+        --max-ticks "$MAX_TICKS" \
+        --load      "$CONFIG" \
+        --seed      "$SEED" \
+        --data-rate "$DATA_RATE" \
+        --keep-min  "$KEEP_MIN" \
+        --output    "$OUT" \
+        --save-world "$WORLD" \
+        --log-every "$LOG_EVERY" \
+        > "$SEED_LOG" 2>&1
+    local EC=$?
+    if [ $EC -eq 0 ]; then
+        echo "[seed $SEED] DONE — $OUT"
+    else
+        echo "[seed $SEED] FAILED with exit code $EC — see $SEED_LOG"
+    fi
+    return $EC
+}
+
+# ─── Dispatch ────────────────────────────────────────────────────────────────
+echo "=== Starting sweep ($MODE) ==="
+echo ""
+START=$SECONDS
+PIDS=()
+FAILED=0
+
+if [ "$MODE" = "parallel" ]; then
+    for S in $SEEDS; do
+        run_seed "$S" &
+        PIDS+=($!)
+    done
+    # wait for each, count failures (don't short-circuit on first failure)
+    for PID in "${PIDS[@]}"; do
+        if ! wait "$PID"; then FAILED=$((FAILED + 1)); fi
+    done
+else
+    for S in $SEEDS; do
+        if ! run_seed "$S"; then FAILED=$((FAILED + 1)); fi
+    done
+fi
+
+ELAPSED=$((SECONDS - START))
+echo ""
+echo "=== Sweep finished ==="
+echo "Elapsed: ${ELAPSED}s  ($(printf '%dh:%02dm' $((ELAPSED/3600)) $(((ELAPSED%3600)/60))))"
+echo "Failed seeds: $FAILED"
+echo "Date: $(date)"
+
+# Exit non-zero if anything failed, so PBS marks the job accordingly
+exit $FAILED
