@@ -1,79 +1,181 @@
-This is the readme for my evolution simulator, The Life Engine. 
+# The Life Engine — UCT Honours research fork
 
-FOR FEATURE REQUESTS, USE THE DISCUSSIONS TAB. FOR BUG REPORTS, USE THE ISSUES TAB. :)
+> This fork (branch `tarique-ALife`) extends Max Robinson's original
+> [Life Engine](https://thelifeengine.net/) with the machinery needed to run a
+> Darwin's-finches-style adaptive-radiation study for an Honours ALife project
+> at UCT. The user-facing browser simulator still works; the major additions
+> are a HyperNEAT-CTRNN neural brain, terrain/emitter food sources, a headless
+> CLI, seeded RNG, and a CHPC sweep+analysis workflow.
 
-# The Life Engine
-[Play here!](https://thelifeengine.net/)
+The life engine is a cellular automaton designed to simulate the long term
+processes of biological evolution. It allows organisms to eat, reproduce,
+mutate, and adapt. Unlike genetic algorithms it does not manually select the
+most "fit" organism for some given task — true natural selection runs its
+course. Organisms that survive, reproduce, and out-compete their neighbours
+naturally propagate through the environment.
 
-The life engine is a cellular automaton designed to simulate the long term processes of biological evolution. It allows organisms to eat, reproduce, mutate, and adapt.
-Unlike genetic algorithms, the life engine does not manually select the most "fit" organism for some given task, but rather allows true natural selection to 
-run its course. Organisms that survive, successfully produce offspring, and out-compete their neighbors naturally propogate througout the environment.
+This is the second version of the
+[original evolution simulator](https://github.com/MaxRobinsonTheGreat/EvolutionSimulator).
 
-This is the second version of the [original evolution simulator](https://github.com/MaxRobinsonTheGreat/EvolutionSimulator), which I started in high school.
+## What this fork adds
 
+| Area | Change |
+|---|---|
+| **Brain** | The discrete FSM brain has been replaced by a HyperNEAT-encoded CTRNN — a CPPN evolves the weights, connection-existence (LEO), and per-neuron time constants (`tau`) for a fixed input/hidden/output substrate built from the organism's anatomy. Movement uses scalar thrust + torque per mover, integrated with an accumulator. See [BRAIN_REDESIGN.md](BRAIN_REDESIGN.md). |
+| **Food types** | Food has a `foodType` (1–3 used; 0 reserved for predation work). Mouths inherit a diet; specialists absorb at 1× their food type, generalists absorb at 1/√n. |
+| **Emitter cells** | Map-placed food sources that periodically spawn food of a configured type — used to build deterministic resource layouts for experiments. |
+| **Terrain** | Perlin-noise island generator (`randomizeEmitters`, 4-pass) for procedural map building. |
+| **Headless mode** | `src/headless.js` runs the simulation as a pure Node script with no canvas / DOM, writing a results JSON suitable for analysis. |
+| **Seeded RNG** | `src/Utils/Rng.js` wraps a seedable PRNG and replaces `Math.random()` throughout. Runs with the same `--seed` reproduce bit-for-bit. |
+| **Charts + CSV** | New `DietSpecializationChart` and `PopulationDietSpecializationChart` in the StatsPanel; every chart has a CSV download button. |
+| **Cluster-spacing maps** | 9 generated experiment maps in `maps/` (3 sizes × 3 inter-cluster distances). See [MAP_DESIGN.md](MAP_DESIGN.md). |
+| **CHPC sweep** | `scripts/sweep.pbs` and `scripts/submit_all_maps.sh` run multi-seed sweeps on the UCT cluster. See [CHPC_GUIDE.md](CHPC_GUIDE.md) and [RUNNING_EXPERIMENTS.md](RUNNING_EXPERIMENTS.md). |
+| **Analysis** | `scripts/analyze_results.py` produces per-run plots (population, species, diet specialisation, per-species lineages). Driven via `uv`. |
 
-# How to Run and Modify the Code
- - [Install node and npm](https://nodejs.org/en/download/)
- - Download or clone this repository
- - Open a terminal or powershell comand prompt, go to the repository and run `npm install`
- - Run `npm run build` (or `npm run build-watch` for a better developer experience)
-   - If you get a `Can't resolve jquery` error message run `npm install --save jquery`
- - Open `dist/index.html` in your browser. The simulation should start running.
+## Documentation map
 
-To load custom creations (found in `/dist/assets`), you must have a simple web server that serves all files in the dist directory. I do this with python:
- - [Install python](https://www.python.org/downloads/)
- - run `python -m http.server --directory dist` from the repository root
- - Open `http://localhost:8000/` in your browser
+| File | What it covers |
+|---|---|
+| [BRAIN_REDESIGN.md](BRAIN_REDESIGN.md) | Architecture of the HyperNEAT-CTRNN brain and the phased migration from the old FSM |
+| [RESEARCH_READINESS_PLAN.md](RESEARCH_READINESS_PLAN.md) | What had to land for publication-grade 10M-tick runs (seeded RNG, lineage pruning, batch sweep, cross-run analysis) |
+| [MAP_DESIGN.md](MAP_DESIGN.md) | The 9 cluster-spacing maps — geometry, emitter design, regeneration |
+| [RUNNING_EXPERIMENTS.md](RUNNING_EXPERIMENTS.md) | End-to-end workflow: generate → push → submit → pull → analyse |
+| [CHPC_GUIDE.md](CHPC_GUIDE.md) | One-time CHPC setup (NVM, Node 16, PBS) plus headless-flag reference |
+| [PERFORMANCE_OPTIMIZATIONS.md](PERFORMANCE_OPTIMIZATIONS.md) | Tier 1–3 DoD speedup roadmap, profiling references |
+| [Changelog.md](Changelog.md) | Upstream release notes (pre-fork) |
+
+# Running the browser simulator
+
+- [Install node and npm](https://nodejs.org/en/download/)
+- Download or clone this repository
+- In the project root, run `npm install`
+- Run `npm run build` (or `npm run build-watch` during development)
+  - If you get `Can't resolve jquery`, run `npm install --save jquery`
+- Open `dist/index.html` in your browser. The simulation should start.
+
+To load custom creations (in `/dist/assets`) you need a simple web server that
+serves the dist directory:
+
+- [Install python](https://www.python.org/downloads/)
+- `python -m http.server --directory dist` from the repo root
+- Open `http://localhost:8000/` in your browser
 
 ### Npm build commands
-- Production mode (minified): `npm run build`
-- Watch mode (dev mode that auto-builds when you save a file): `npm run build-watch`
-- Dev mode (better error messages): `npm run build-dev` 
 
+- Production (minified): `npm run build`
+- Watch mode (auto-build on save): `npm run build-watch`
+- Dev mode (better error messages): `npm run build-dev`
+
+# Running headless
+
+The headless runner is the entry point for the experiments — no browser, no
+canvas, just a Node script that writes a results JSON.
+
+```bash
+node src/headless.js \
+    --max-ticks 1000000 \
+    --load      maps/map_300_medium.json \
+    --seed      1 \
+    --data-rate 1000 \
+    --keep-min  50 \
+    --output    results/map_300_medium/seed_1.json \
+    --save-world results/map_300_medium/seed_1_world.json \
+    --log-every 50000
+```
+
+Full flag reference is in [CHPC_GUIDE.md §7](CHPC_GUIDE.md#7-headless-mode-flags-reference).
+For CHPC sweeps, use `scripts/sweep.pbs` (see [RUNNING_EXPERIMENTS.md](RUNNING_EXPERIMENTS.md)).
 
 # How the Simulation Works
+
 ## The Environment
-The environment is a simple grid system made up of cells, which at every tick have a certain type. The environment is populated by organisms, which are structures of multiple cells.
+
+The environment is a grid of cells; each cell has a type at each tick.
+Organisms are structures of multiple cells living on the grid.
 
 ## Cells
-A cell can be one of the following types.
-### Independent Cells
-Independent cells are not part of organisms. 
-- Empty - Dark blue, inert.
-- Food - Grayish-blue, provides nourishment for organisms.
-- Wall - Gray, blocks organisms movement and reproduction.
-### Organism Cells
-Organism Cells are only found in organisms, and cannot exist on their own in the grid.
-- Mouth - Orange, eats food in directly adjacent cells.
-- Producer - Green, randomly generates food in directly adjacent empty cells.
-- Mover - Light blue, allows the organism to move and rotate randomly.
-- Killer - Red, harms organisms in directly adjacent cells (besides itself).
-- Armor - Purple, negates the effects of killer cells.
-- Eye - Light purple with a slit, allows the organism to see and move intelligently. See further description below.
+
+### Independent cells (not part of any organism)
+
+- **Empty** — Dark blue, inert.
+- **Food** — Grayish-blue; provides nourishment. Each food cell carries a
+  `foodType` (1, 2, or 3 in the current experiments; 0 reserved for future
+  predation).
+- **Wall** — Gray; blocks movement and reproduction.
+- **Emitter** — Map-placed source that periodically spawns food of a fixed type
+  into a free cardinal neighbour. Used to build deterministic food layouts for
+  experiments — see [MAP_DESIGN.md](MAP_DESIGN.md).
+
+### Organism cells
+
+- **Mouth** — Eats food in adjacent cells. Each mouth carries a `diet`
+  (specialist for one food type, or generalist). Specialists absorb at 1×;
+  generalists at 1/√n where n is the number of edible types — there is a real
+  cost to being a generalist.
+- **Producer** — Randomly generates food in adjacent empty cells.
+- **Mover** — Carries a body-frame **direction** and contributes a scalar
+  thrust (chosen by the brain) along that direction. The summed thrusts and
+  their torques about the pivot drive continuous `(vx, vy, ω)` accumulators on
+  the organism, snap-moving / snap-rotating when the accumulator crosses 1
+  cell or 90°. Mover *placement* and *orientation* directly determine
+  locomotion capability.
+- **Killer** — Damages adjacent organisms (not itself).
+- **Armor** — Negates killer effects.
+- **Eye** — Has a direction; raycasts forward to the first non-empty cell
+  within range, feeding cell-type / distance / dx-dy into the brain's input
+  neurons.
 
 ## Organisms
+
 Organisms are structures of cells that eat food, reproduce, and die.
-When an organism dies, every cell in the grid that was occupied by a cell in its body will be changed to food.
-Their lifespan is calculated by multiplying the number of cells they have by the hyperparameter `Lifespan Multiplier`. They will survive for that many ticks unless killed by another organism.
-When touched by a killer cell, an organism will take damage. Once it has taken as much damage as it has cells in its body, it will die. If the hyperparameter `One touch kill` is on, an organism will immediatly die when touched by a killer cell.
+When an organism dies, every grid cell it occupied is converted to food (the
+food type matches the cell type origin where applicable). Lifespan is
+`cell_count × Lifespan Multiplier`. Damage equal to the body cell count kills
+an organism unless `One touch kill` is on, in which case any killer hit kills
+instantly.
 
 ## Reproduction
-Once an organism has eaten as much food as it has cells in its body, it will attempt to reproduce. 
-First, offspring is formed by cloning the current organism and possibly mutating it (see below).
-The offspring birth location is then chosen a certain number of cells in a random direction (up, down, left, right). This number is calculated programmatically such that it is far enough away that it can't intersect with it's parent.
-Additionally, a random value between 1 and 3 is added to the location to introduce a little variance.
-Reproduction can fail if the offspring attempts to occupy non-empty cells, like other organisms and food. If reproduction fails, the food required to produce a child is wasted.
+
+Once an organism has accumulated as much food as it has cells, it attempts to
+reproduce. The offspring is a (possibly mutated) clone, placed a programmatic
+distance away in a random cardinal direction plus a small random offset.
+Reproduction fails if the offspring would overlap any non-empty cell, and the
+food cost is then wasted.
 
 ## Mutation
-Offspring can mutate their anatomies in 3 different ways: change a cell, lose a cell, or add a cell. Changing a cell sets a random cell to a random type. Losing a cell removes a random cell. Note that this can result in organisms with "gaps" and cells disconnected from the rest of its body. I consider this a feature, not a bug.
-To add a cell the organism first selects a cell it already has in its body, then grows a new cell with a random type in a location adjacent to the selected cell.
 
-If an organism mutates, there is a 10% chance that mutation will alter the movement patterns of the organism (see below).
-
-## Movement and Rotation
-Organisms with mover cells (light blue) are permitted to move freely about the grid. Only a single mover cell is required and adding more doesn't do anything. By default, an organism selects a random direction and moves one cell per tick in that direction for a certain number of ticks. This number is called "Move range", and it can mutate over time.
-
-Organims can also rotate around a central pivot cell. This cell can never be removed by mutation, though it can change type. Movers rotate randomly when they change direction, and their rotation is not necessarily the same as their movement direction, ie, they aren't always facing the direction they are moving. Offspring of all organisms (including static ones) rotate randomly during reproduction. This rotation can be toggled in the simulation controls.
+Offspring can mutate their anatomy by changing a cell, losing a cell, or
+adding a cell. New cells are grown adjacent to an existing one. The brain
+mutates independently of anatomy (CPPN topology and weight mutations); a CPPN
+mutation triggers a substrate rebuild but leaves the substrate coordinates
+(which come from anatomy) unchanged.
 
 ## Eyes and Brains
-Any organism can evolve eyes, but when an organism has both eyes and mover cells it is given a brain. The eye, unlike other cells, has a direction, which is denoted by the direction of the slit in the cell. It "looks" forward in this direction and "sees" the first non-empty cell within a certain range. It checks the type of the cell and informs the brain, which then decideds how to move. The brain can either ignore (keep moving in whatever direction), chase (move towards the observed cell), or retreat (move in the opposite direction of the observed cell). The brain maps different observed cell types to different actions. For instance, the brain will chase when it sees food and retreat when it sees a killer cell. These behaviors can mutate over time. 
+
+Any organism can evolve eyes. When an organism has at least one eye **and**
+at least one mover, it is given a HyperNEAT-CTRNN brain:
+
+- **Substrate**: input neurons at each eye's body-frame `(loc_col, loc_row)`,
+  a small fixed 2×2 hidden grid, and one output neuron at each mover's
+  position.
+- **CPPN**: a NEAT-evolved network with `{sigmoid, gauss, sin, identity, abs}`
+  activations. Given a `(src_x, src_y, dst_x, dst_y, distance, bias)` pair it
+  outputs `weight`, `leo` (link-expression gate), and `tau` (per-target CTRNN
+  time constant).
+- **Dynamics**: leaky-integrator CTRNN per tick. The forward pass produces
+  scalar thrusts at each output neuron; those drive the locomotion
+  accumulator.
+
+The key feature of this design is that morphology *is* part of the brain
+genotype: relocating an eye or mover changes its substrate coordinate, the
+CPPN is re-queried, and behaviour shifts accordingly — without any explicit
+brain-genome surgery. That coupling is what makes morphological selection
+informative for the research question. See [BRAIN_REDESIGN.md](BRAIN_REDESIGN.md)
+for the full design rationale.
+
+# Bug reports & feedback
+
+Original-project bugs/features: use the upstream
+[Discussions / Issues tabs](https://github.com/MaxRobinsonTheGreat/EvolutionSimulatorV2).
+For research-fork issues, open one on
+[TKMaster27/LifeEngine](https://github.com/TKMaster27/LifeEngine).
