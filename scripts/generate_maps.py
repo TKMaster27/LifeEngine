@@ -1,0 +1,206 @@
+"""Generate the 9 cluster-spacing experiment maps.
+
+3 sizes (100, 300, 500) × 3 distance levels (close, medium, far). Each map has
+three single-food-type emitter clusters arranged in an equilateral triangle
+around the map centre. Cluster A = type 1, B = type 2, C = type 3.
+
+Uses Experiment1_Base.json as a template so hyperparameters are inherited.
+No starting organism is placed.
+
+Usage:
+    uv run scripts/generate_maps.py
+"""
+
+from __future__ import annotations
+import json
+import math
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+TEMPLATE  = REPO_ROOT / "Experiment1_Base.json"
+OUT_DIR   = REPO_ROOT / "maps"
+
+SIZES = [100, 300, 500]
+
+# Cluster shape: sparse lattice scatter within a disk.
+#   - Emitters placed every EMITTER_SPACING cells in both axes (relative to
+#     the cluster centre). Every emitter has all 4 cardinal neighbours empty,
+#     so 100% productive at Hyperparams.emitterProdProb.
+#   - With spacing=5 → 4-cell gaps between emitters, wide enough for a
+#     4-cell-wide organism to navigate the cluster interior. All produced
+#     food is therefore reachable, unlike solid/annulus clusters where
+#     emitters block organism movement.
+# Radii chosen to fit both 'close' (no cluster overlap) and 'far' (no map-edge
+# clipping) layouts on each map size.
+CLUSTER_RADIUS  = {100: 8, 300: 21, 500: 35}
+EMITTER_SPACING = 5
+
+# Pairwise inter-cluster distance is R * sqrt(3) where R is the triangle's
+# circumradius. Expressed as a fraction of map side length.
+DISTANCE_LEVELS = {
+    "close":  0.15,
+    "medium": 0.30,
+    "far":    0.42,
+}
+
+# Cluster -> food type. One type per cluster.
+FOOD_TYPES = (1, 2, 3)
+
+
+def cluster_centers(size: int, r_fraction: float) -> list[tuple[int, int]]:
+    """Three equilateral-triangle vertices around the map centre. One vertex
+    points up so the layout looks the same across map sizes when rendered."""
+    cx = cy = size / 2.0
+    R = r_fraction * size
+    centers = []
+    for k in range(3):
+        # 90, 210, 330 degrees — vertex 0 at top, then clockwise
+        angle_deg = 90 + k * 120
+        a = math.radians(angle_deg)
+        x = round(cx + R * math.cos(a))
+        y = round(cy - R * math.sin(a))  # screen y is inverted
+        centers.append((x, y))
+    return centers
+
+
+def cluster_emitters(center: tuple[int, int], radius: int, food_type: int,
+                     size: int, spacing: int = EMITTER_SPACING) -> list[dict]:
+    """Sparse lattice of emitters within a disk at `center`.
+
+    Emitters are placed at cluster-relative offsets that are multiples of
+    `spacing` in both axes — so the gap between any two cardinally-adjacent
+    emitters is `spacing - 1` empty cells. Cells outside the grid are clipped.
+    """
+    cx, cy = center
+    R2 = radius * radius
+    out = []
+    for dy in range(-radius, radius + 1):
+        if dy % spacing != 0:
+            continue
+        for dx in range(-radius, radius + 1):
+            if dx % spacing != 0:
+                continue
+            if dx * dx + dy * dy > R2:
+                continue
+            c, r = cx + dx, cy + dy
+            if 0 <= c < size and 0 <= r < size:
+                out.append({"c": c, "r": r, "t": food_type})
+    return out
+
+
+def empty_fossil_record() -> dict:
+    """Minimum-viable fossil_record shape the loader and analyzer both accept."""
+    empty_series = {
+        "tick_record":            [0],
+        "pop_counts":             [0],
+        "species_counts":         [0],
+        "av_mut_rates":           [0],
+        "av_cells":               [0],
+        "av_cell_counts":         [{}],
+        "species_diet_counts":    [{}],
+        "population_diet_counts": [{}],
+        "av_connections":         [0],
+        "av_hidden_nodes":        [0],
+        "species_populations":    [{}],
+    }
+    return {
+        "extant_species":     {},
+        "extinct_species":    {},
+        "min_discard":        10,
+        "min_serialize_keep": None,
+        "record_size_limit":  500,
+        **empty_series,
+        "full_tick_record":              [0],
+        "full_pop_counts":               [0],
+        "full_species_counts":           [0],
+        "full_av_mut_rates":             [0],
+        "full_av_cells":                 [0],
+        "full_av_cell_counts":           [{}],
+        "full_species_diet_counts":      [{}],
+        "full_population_diet_counts":   [{}],
+        "full_av_connections":           [0],
+        "full_av_hidden_nodes":          [0],
+        "full_species_populations":      [{}],
+        "records":       empty_series,
+        "window_records": empty_series,
+        "species":       {},
+        "species_diets": {},
+    }
+
+
+def build_map(size: int, distance_label: str, r_fraction: float,
+              template_controls: dict) -> dict:
+    radius = CLUSTER_RADIUS[size]
+    centers = cluster_centers(size, r_fraction)
+    emitters = []
+    per_cluster_counts = []
+    for center, ftype in zip(centers, FOOD_TYPES):
+        cluster = cluster_emitters(center, radius, ftype, size)
+        emitters.extend(cluster)
+        per_cluster_counts.append(len(cluster))
+
+    grid = {
+        "cell_size": 4,
+        "cols":      size,
+        "rows":      size,
+        "food":      [],
+        "walls":     [],
+        "emitters":  emitters,
+    }
+
+    return {
+        "_meta": {
+            "generator":             "scripts/generate_maps.py",
+            "size":                  size,
+            "distance":              distance_label,
+            "R_fraction":            r_fraction,
+            "cluster_shape":         "sparse_lattice_disk",
+            "cluster_radius":        radius,
+            "emitter_spacing":       EMITTER_SPACING,
+            "cluster_centers":       centers,
+            "food_type_per_cluster": {f"cluster_{i}": t for i, t in enumerate(FOOD_TYPES)},
+            "emitters_per_cluster":  per_cluster_counts,
+            "emitters_total":        len(emitters),
+        },
+        "num_rows":            size,
+        "num_cols":            size,
+        "total_mutability":    0,
+        "largest_cell_count":  0,
+        "reset_count":         0,
+        "total_ticks":         0,
+        "data_update_rate":    100,
+        "grid":                grid,
+        "organisms":           [],
+        "fossil_record":       empty_fossil_record(),
+        "controls":            template_controls,
+    }
+
+
+def main() -> None:
+    with TEMPLATE.open() as f:
+        template = json.load(f)
+    template_controls = template["controls"]
+
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+
+    print(f"{'size':>5} {'distance':>8} {'R_frac':>7} {'vertex_dist':>11} "
+          f"{'radius':>7} {'spacing':>8} {'per_cluster':>14} {'total':>6}  file")
+    print("-" * 95)
+
+    for size in SIZES:
+        for label, r_frac in DISTANCE_LEVELS.items():
+            env = build_map(size, label, r_frac, template_controls)
+            path = OUT_DIR / f"map_{size}_{label}.json"
+            with path.open("w") as f:
+                json.dump(env, f)
+            vertex_dist = r_frac * size * math.sqrt(3)
+            per_cluster = env["_meta"]["emitters_per_cluster"]
+            print(f"{size:>5} {label:>8} {r_frac:>7.2f} {vertex_dist:>11.1f} "
+                  f"{env['_meta']['cluster_radius']:>7} "
+                  f"{env['_meta']['emitter_spacing']:>8} "
+                  f"{str(per_cluster):>14} "
+                  f"{env['_meta']['emitters_total']:>6}  {path.relative_to(REPO_ROOT)}")
+
+
+if __name__ == "__main__":
+    main()
