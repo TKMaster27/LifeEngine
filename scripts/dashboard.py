@@ -355,18 +355,31 @@ def _summary_json(path):
 
 
 # ── Discovery ──────────────────────────────────────────────────────────────
+def _seed_files(directory):
+    """List tracked-result seed files in a directory, excluding world snapshots."""
+    return sorted(
+        p for p in glob.glob(os.path.join(directory, "seed_*.json"))
+        if not p.endswith("_world.json")
+    )
+
+
 def discover_layout(folder):
     """Return (envs, flat) where envs is {env_name: [paths]} based on the
-    results/<env>/seed_*.json convention, and flat is the bare top-level list."""
+    results/<env>/seed_*.json convention, and flat is the bare top-level list.
+    Excludes any `seed_*_world.json` snapshots (those live under worlds/ in
+    the new layout but may persist in older results trees)."""
     envs = {}
     if os.path.isdir(folder):
         for entry in sorted(os.listdir(folder)):
             sub = os.path.join(folder, entry)
             if os.path.isdir(sub):
-                seeds = sorted(glob.glob(os.path.join(sub, "seed_*.json")))
+                seeds = _seed_files(sub)
                 if seeds:
                     envs[entry] = seeds
-    flat = sorted(glob.glob(os.path.join(folder, "*.json")))
+    flat = sorted(
+        p for p in glob.glob(os.path.join(folder, "*.json"))
+        if not p.endswith("_world.json")
+    )
     return envs, flat
 
 

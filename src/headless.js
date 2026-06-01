@@ -198,6 +198,7 @@ if (LOAD) {
 // ─── Simulation loop ──────────────────────────────────────────────────────────
 
 console.log(`[headless] Starting: max_ticks=${MAX_TICKS}  grid=${env.grid_map.cols}x${env.grid_map.rows}  output=${OUTPUT}`);
+console.log(`[headless] Predation (deadTurnToFood): ${Hyperparams.deadTurnToFood ? 'ON' : 'off'}`);
 const wall_start         = Date.now();
 let   extinction_tick    = null;
 let   last_log_wall      = wall_start;
@@ -309,6 +310,11 @@ const results = {
     cell_size:         env.grid_map.cell_size,
     data_update_rate:  env.data_update_rate,
     min_serialize_keep: FossilRecord.min_serialize_keep,
+    // ── Provenance / experiment flags (self-describing for downstream analysis) ──
+    config_source:     CONFIG,
+    world_source:      LOAD,
+    source_map:        LOAD || CONFIG || null,
+    predation_enabled: !!Hyperparams.deadTurnToFood,
     fossil_record:     FossilRecord.serialize(),
     founder_brains_ranked:    FossilRecord.exportFounderBrainsRanked(),
     living_organisms_ranked:  livingRanked,

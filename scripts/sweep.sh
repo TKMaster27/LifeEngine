@@ -13,8 +13,12 @@
 #       > sweep_300_close.out 2>&1 &
 #   disown
 #
-# All seeds for one env land in results/<env_name>/seed_<N>.json. Existing
-# outputs are skipped — re-running the same command resumes the missing seeds.
+# Outputs are split into two parallel folders:
+#   results/<env_name>/seed_<N>.json          — tracked simulation stats (analysis)
+#   worlds/<env_name>/seed_<N>_world.json     — browser-loadable end-of-run snapshot
+# Predation maps (controls.deadTurnToFood=true) automatically land in their own
+# env folder because the env_name comes from the map filename. Existing
+# results files are skipped so re-running resumes the missing seeds.
 # ─────────────────────────────────────────────────────────────────────────────
 
 set -u
@@ -89,16 +93,18 @@ echo "Mode:          $MODE"
 echo ""
 
 ENV_NAME="$(basename "$CONFIG" .json)"
-OUT_DIR="results/${ENV_NAME}"
-mkdir -p "$OUT_DIR"
-echo "Output dir:    $OUT_DIR"
+RESULTS_DIR="results/${ENV_NAME}"
+WORLDS_DIR="worlds/${ENV_NAME}"
+mkdir -p "$RESULTS_DIR" "$WORLDS_DIR"
+echo "Results dir:   $RESULTS_DIR"
+echo "Worlds dir:    $WORLDS_DIR"
 echo ""
 
 # ─── Per-seed runner ─────────────────────────────────────────────────────────
 run_seed() {
     local SEED=$1
-    local OUT="${OUT_DIR}/seed_${SEED}.json"
-    local WORLD="${OUT_DIR}/seed_${SEED}_world.json"
+    local OUT="${RESULTS_DIR}/seed_${SEED}.json"
+    local WORLD="${WORLDS_DIR}/seed_${SEED}_world.json"
     local SEED_LOG="logs/${ENV_NAME}_seed_${SEED}_${RUN_ID}.log"
 
     if [ -f "$OUT" ]; then

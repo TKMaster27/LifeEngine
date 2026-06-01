@@ -12,8 +12,13 @@
 #   qsub -v CONFIG=Experiment1_Base.json,SEEDS="1 2 3 4 5",MODE=sequential scripts/sweep.pbs
 # and change the #PBS -l select line to ncpus=1.
 #
-# All seeds for one env land in results/<env_name>/seed_<N>.json. Existing
-# outputs are skipped — re-submitting after a crash resumes the remaining seeds.
+# Outputs are split into two parallel folders:
+#   results/<env_name>/seed_<N>.json          — tracked simulation stats (analysis)
+#   worlds/<env_name>/seed_<N>_world.json     — browser-loadable end-of-run snapshot
+# Predation maps (controls.deadTurnToFood=true) naturally land in their own
+# env folder because the env_name is derived from the map filename — e.g.
+# results/map_300_medium_V1_predation/seed_1.json. Existing outputs are
+# skipped so re-submitting after a crash resumes the remaining seeds.
 # ─────────────────────────────────────────────────────────────────────────────
 
 #PBS -N life_sweep
@@ -62,18 +67,22 @@ if [ ! -f "$CONFIG" ]; then
     echo "ERROR: Config file '$CONFIG' not found in $PROJECT_DIR"; exit 1
 fi
 
-# Derive a clean env name from the config file (strip path + .json)
+# Derive a clean env name from the config file (strip path + .json).
+# Predation variants (filename ends in _predation) automatically get a
+# separate env folder, so results are easy to identify at a glance.
 ENV_NAME="$(basename "$CONFIG" .json)"
-OUT_DIR="results/${ENV_NAME}"
-mkdir -p "$OUT_DIR"
-echo "Output dir:    $OUT_DIR"
+RESULTS_DIR="results/${ENV_NAME}"
+WORLDS_DIR="worlds/${ENV_NAME}"
+mkdir -p "$RESULTS_DIR" "$WORLDS_DIR"
+echo "Results dir:   $RESULTS_DIR"
+echo "Worlds dir:    $WORLDS_DIR"
 echo ""
 
 # ─── Per-seed runner ─────────────────────────────────────────────────────────
 run_seed() {
     local SEED=$1
-    local OUT="${OUT_DIR}/seed_${SEED}.json"
-    local WORLD="${OUT_DIR}/seed_${SEED}_world.json"
+    local OUT="${RESULTS_DIR}/seed_${SEED}.json"
+    local WORLD="${WORLDS_DIR}/seed_${SEED}_world.json"
     local SEED_LOG="logs/${ENV_NAME}_seed_${SEED}_${PBS_JOBID}.log"
 
     if [ -f "$OUT" ]; then

@@ -14,6 +14,13 @@
 #   SEEDS="1 2 3" bash scripts/sweep_all_maps.sh           # subset of seeds
 #   MAX_TICKS=1000000 bash scripts/sweep_all_maps.sh       # pilot sweep
 #   ONLY=300 bash scripts/sweep_all_maps.sh                # only one map size
+#   VARIANT=predation bash scripts/sweep_all_maps.sh       # sweep predation maps only
+#   VARIANT=both bash scripts/sweep_all_maps.sh            # both normal and predation
+#
+# Map variants — which set of starter-organism maps is swept:
+#   VARIANT=normal     (default)  → maps/map_<size>_<dist>_V1.json
+#   VARIANT=predation             → maps/map_<size>_<dist>_V1_predation.json
+#   VARIANT=both                  → both sets (doubles the workload)
 #
 # In tmux (survives SSH disconnect):
 #   tmux new -s sweep
@@ -21,6 +28,12 @@
 #   Ctrl-b d                                               # detach
 #   # later:
 #   tmux attach -t sweep
+#
+# Outputs are split into two parallel folders:
+#   results/<env_name>/seed_<N>.json        — tracked simulation stats
+#   worlds/<env_name>/seed_<N>_world.json   — browser-loadable world snapshot
+# The env_name is taken from the map filename so predation runs are easy to
+# identify at a glance (e.g. results/map_300_far_V1_predation/seed_3.json).
 #
 # Resumable: existing results/<env>/seed_<N>.json files are skipped so a
 # re-run picks up where it left off.
@@ -47,8 +60,19 @@ DATA_RATE="${DATA_RATE:-1000}"
 KEEP_MIN="${KEEP_MIN:-50}"
 LOG_EVERY="${LOG_EVERY:-100000}"
 ONLY="${ONLY:-}"
+VARIANT="${VARIANT:-normal}"      # normal | predation | both
 NODE_BIN="${NODE_BIN:-$(command -v node)}"
 MAX_PARALLEL="${MAX_PARALLEL:-$(nproc 2>/dev/null || echo 4)}"
+
+case "$VARIANT" in
+    normal|predation|both) ;;
+    *) echo "ERROR: VARIANT must be 'normal', 'predation', or 'both' (got '$VARIANT')"; exit 2 ;;
+esac
+
+# Build the list of suffixes to sweep based on VARIANT
+SUFFIXES=()
+if [ "$VARIANT" = "normal" ] || [ "$VARIANT" = "both" ]; then SUFFIXES+=("_V1"); fi
+if [ "$VARIANT" = "predation" ] || [ "$VARIANT" = "both" ]; then SUFFIXES+=("_V1_predation"); fi
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
@@ -58,7 +82,7 @@ if [ -z "$NODE_BIN" ] || [ ! -x "$NODE_BIN" ]; then
     echo "ERROR: Node binary not found ('$NODE_BIN'). Set NODE_BIN or PATH."; exit 1
 fi
 
-mkdir -p logs results
+mkdir -p logs results worlds
 RUN_ID="$(date +%Y%m%d-%H%M%S)-$$"
 
 # ─── Enumerate (map, seed) work items, skipping existing outputs ─────────────
@@ -67,18 +91,20 @@ SKIPPED=0
 for SIZE in "${SIZES[@]}"; do
     if [ -n "$ONLY" ] && [ "$ONLY" != "$SIZE" ]; then continue; fi
     for DIST in "${DISTANCES[@]}"; do
-        MAP="maps/map_${SIZE}_${DIST}_V1.json"
-        if [ ! -f "$MAP" ]; then
-            echo "WARN: skipping '$MAP' (file not found — run generate_maps.py?)"; continue
-        fi
-        ENV_NAME="$(basename "$MAP" .json)"
-        mkdir -p "results/$ENV_NAME"
-        for S in $SEEDS; do
-            OUT="results/$ENV_NAME/seed_${S}.json"
-            if [ -f "$OUT" ]; then
-                SKIPPED=$((SKIPPED + 1)); continue
+        for SUF in "${SUFFIXES[@]}"; do
+            MAP="maps/map_${SIZE}_${DIST}${SUF}.json"
+            if [ ! -f "$MAP" ]; then
+                echo "WARN: skipping '$MAP' (file not found — run generate_maps.py / duplicate_maps_predation.py?)"; continue
             fi
-            WORK+=("$MAP|$ENV_NAME|$S")
+            ENV_NAME="$(basename "$MAP" .json)"
+            mkdir -p "results/$ENV_NAME" "worlds/$ENV_NAME"
+            for S in $SEEDS; do
+                OUT="results/$ENV_NAME/seed_${S}.json"
+                if [ -f "$OUT" ]; then
+                    SKIPPED=$((SKIPPED + 1)); continue
+                fi
+                WORK+=("$MAP|$ENV_NAME|$S")
+            done
         done
     done
 done
@@ -90,6 +116,7 @@ echo "=== sweep_all_maps ==="
 echo "Run ID:        $RUN_ID"
 echo "Host:          $(hostname)  ($NCPU cores)"
 echo "Node:          $NODE_BIN ($($NODE_BIN --version 2>/dev/null))"
+echo "Variant:       $VARIANT  (map suffixes: ${SUFFIXES[*]})"
 echo "Total runs:    $TOTAL  (skipped $SKIPPED already-complete)"
 echo "Max parallel:  $MAX_PARALLEL"
 echo "Max ticks:     $MAX_TICKS"
@@ -107,7 +134,7 @@ fi
 run_one() {
     local MAP=$1 ENV_NAME=$2 SEED=$3
     local OUT="results/$ENV_NAME/seed_${SEED}.json"
-    local WORLD="results/$ENV_NAME/seed_${SEED}_world.json"
+    local WORLD="worlds/$ENV_NAME/seed_${SEED}_world.json"
     local LOG="logs/${ENV_NAME}_seed_${SEED}_${RUN_ID}.log"
 
     local T0=$SECONDS
