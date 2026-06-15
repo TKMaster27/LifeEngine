@@ -258,9 +258,12 @@ def species_table(fr):
 
 
 @st.cache_data(show_spinner="Parsing and preparing seed…", max_entries=MAX_CACHED_SEEDS)
-def prepare(path=None, raw=None, name=""):
+def prepare(path=None, raw=None, name="", sig=None):
     """Parse one seed and return a COMPACT bundle. The 400 MB raw dict is
-    local to this function and freed on return; only the small bundle is cached."""
+    local to this function and freed on return; only the small bundle is cached.
+
+    `sig` is the file's (mtime, size) — unused in the body, present only so the
+    cache invalidates when the file behind `path` changes (see _file_sig)."""
     d = json.loads(raw) if raw is not None else json.load(open(path))
     fr = d.get("fossil_record", {})
     records = fr.get("records", {})
@@ -291,7 +294,7 @@ def prepare(path=None, raw=None, name=""):
 
 # ── Cheap final-tick diet snapshot (for the cross-env outcome view) ────────
 @st.cache_data(show_spinner=False)
-def final_diet_stats(path):
+def final_diet_stats(path, sig=None):
     """Return a dict of {generalist_pct, specialist_pct, dominant_specialist_pct,
     dominant_diet, and raw counts per category} for the LAST recorded tick of
     one seed. Uses ijson to stream the diet array without loading the full
@@ -355,6 +358,19 @@ def _summary_json(path):
 
 
 # ── Discovery ──────────────────────────────────────────────────────────────
+def _file_sig(path):
+    """(mtime, size) for a file — folded into cache keys so that swapping the
+    contents behind an identical path (e.g. renaming results1/ -> results/, or
+    regenerating a seed in place) busts the cache instead of serving the stale
+    parse. Streamlit's @st.cache_data keys on argument *values*, not file
+    contents, so without this a path string that hasn't changed always hits."""
+    try:
+        s = os.stat(path)
+        return (s.st_mtime, s.st_size)
+    except OSError:
+        return (0.0, 0)
+
+
 def _seed_files(directory):
     """List tracked-result seed files in a directory, excluding world snapshots."""
     return sorted(
@@ -384,7 +400,9 @@ def discover_layout(folder):
 
 
 @st.cache_data(show_spinner="Reading summaries…")
-def scan_paths(paths_tuple):
+def scan_paths(paths_tuple, sigs_tuple=None):
+    # sigs_tuple is unused in the body; it parallels paths_tuple purely so the
+    # cached summary table refreshes when any underlying file changes.
     rows = []
     for fp in paths_tuple:
         try:
@@ -520,7 +538,7 @@ def render_summary(envs, flat):
     if not paths:
         st.warning("No seed JSON files found under that folder.")
         return
-    df = scan_paths(tuple(paths))
+    df = scan_paths(tuple(paths), tuple(_file_sig(p) for p in paths))
     if df.empty:
         st.warning("No readable seed files.")
         return
@@ -735,7 +753,8 @@ def render_environment(envs):
     if not chosen:
         st.info("Pick one or more seeds above.")
         return
-    bundles = [prepare(path=fp, name=os.path.basename(fp)) for fp in chosen]
+    bundles = [prepare(path=fp, name=os.path.basename(fp), sig=_file_sig(fp))
+               for fp in chosen]
     metas = [b["meta"] for b in bundles]
     survived = sum(1 for m in metas if m.get("reached_max_ticks"))
     extinct  = len(metas) - survived
@@ -822,7 +841,7 @@ def render_compare_envs(envs):
         return
 
     paths = tuple(p for env in chosen for p in envs[env])
-    df = scan_paths(paths)
+    df = scan_paths(paths, tuple(_file_sig(p) for p in paths))
     if df.empty:
         st.warning("No readable summaries.")
         return
@@ -885,7 +904,7 @@ def render_compare_envs(envs):
     rows = []
     with st.spinner("Reading end-of-run diet composition…"):
         for _, row in df.iterrows():
-            stats = final_diet_stats(row["path"])
+            stats = final_diet_stats(row["path"], sig=_file_sig(row["path"]))
             if not stats:
                 continue
             rows.append({
@@ -1061,7 +1080,8 @@ def render_overlay(envs, flat):
 
     frames = []
     for fp in chosen:
-        b = prepare(path=fp, name=f"{os.path.basename(os.path.dirname(fp))}/{os.path.basename(fp)}")
+        b = prepare(path=fp, name=f"{os.path.basename(os.path.dirname(fp))}/{os.path.basename(fp)}",
+                    sig=_file_sig(fp))
         s = overlay_series(b, metric)
         if s is not None and not s.empty:
             frames.append(s)
@@ -1101,6 +1121,13 @@ with st.sidebar:
                            help="A directory of seed JSONs, or a directory of "
                                 "subdirectories where each subdir is one environment.")
     uploaded = st.file_uploader("…or drop a single seed file", type="json")
+
+    if st.button("🔄 Clear cache & reload", use_container_width=True,
+                 help="Force a fresh parse of every file. Use this if you've "
+                      "swapped folder contents on disk (e.g. renamed results1/ "
+                      "to results/) and want to be certain nothing is stale."):
+        st.cache_data.clear()
+        st.rerun()
 
     envs, flat = discover_layout(folder)
     n_env_files = sum(len(v) for v in envs.values())
@@ -1144,4 +1171,4 @@ else:  # Single seed
         chosen = st.sidebar.selectbox("Seed file",
                                       [p for p, _ in options],
                                       format_func=lambda p: labels[p])
-        render_single(prepare(path=chosen, name=labels[chosen]))
+        render_single(prepare(path=chosen, name=labels[chosen], sig=_file_sig(chosen)))

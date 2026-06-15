@@ -242,7 +242,7 @@ class Organism {
                 diets.add(cell.diet);
             }
         }
-        return diets.size > 1 ? 1 / diets.size : 1.0;
+        return diets.size > 1 ? 1 / Math.sqrt(diets.size) : 1.0;
     }
 
     getEdibleFoodTypes() {
