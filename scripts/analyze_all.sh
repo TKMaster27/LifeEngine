@@ -6,7 +6,7 @@
 # Usage:
 #   bash scripts/analyze_all.sh                  # analyse everything new
 #   bash scripts/analyze_all.sh --force          # re-analyse even if output exists
-#   bash scripts/analyze_all.sh --only 300       # only map_300_* results
+#   bash scripts/analyze_all.sh --only d05       # only results whose path matches 'd05'
 #
 # Resumable: skips a run whose summary.png already exists, unless --force.
 # Prints a one-line summary (extinction tick, final pop, final species) per run.

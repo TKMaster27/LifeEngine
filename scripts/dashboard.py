@@ -9,11 +9,11 @@ Run with:
 By default it looks in ./results — the same layout the CHPC sweep produces:
 
     results/
-    ├── map_300_close/
+    ├── map_500_d01/
     │   ├── seed_1.json
     │   ├── seed_2.json
     │   └── ...
-    ├── map_300_medium/
+    ├── map_500_d02/
     └── ...
 
 Four views:

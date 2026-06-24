@@ -4,13 +4,13 @@
 # Same behaviour as scripts/sweep.pbs but without the PBS scheduler.
 #
 # Usage:
-#   bash scripts/sweep.sh --config maps/map_300_close.json --seeds "1 2 3 4 5"
+#   bash scripts/sweep.sh --config maps/map_500_d05.json --seeds "1 2 3 4 5"
 #   bash scripts/sweep.sh --config maps/warmup.json --seeds "0" --max-ticks 1000000
-#   bash scripts/sweep.sh --config maps/map_500_far.json --seeds "1 2 3 4 5" --mode sequential
+#   bash scripts/sweep.sh --config maps/map_500_d10.json --seeds "1 2 3 4 5" --mode sequential
 #
 # To run detached so it survives SSH disconnect:
-#   nohup bash scripts/sweep.sh --config maps/map_300_close.json --seeds "1 2 3 4 5" \
-#       > sweep_300_close.out 2>&1 &
+#   nohup bash scripts/sweep.sh --config maps/map_500_d05.json --seeds "1 2 3 4 5" \
+#       > sweep_500_d05.out 2>&1 &
 #   disown
 #
 # Outputs are split into two parallel folders:

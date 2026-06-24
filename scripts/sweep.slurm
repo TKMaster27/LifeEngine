@@ -4,14 +4,14 @@
 # Equivalent to scripts/sweep.pbs but for SLURM-managed clusters (e.g. UCT HPC).
 #
 # Usage (one job per environment):
-#   sbatch --export=ALL,CONFIG=maps/map_300_close_V1.json scripts/sweep.slurm
-#   sbatch --export=ALL,CONFIG=maps/map_300_close_V1.json,SEEDS="1 2 3 4 5",MAX_TICKS=10000000 scripts/sweep.slurm
+#   sbatch --export=ALL,CONFIG=maps/map_500_d05.json scripts/sweep.slurm
+#   sbatch --export=ALL,CONFIG=maps/map_500_d05.json,SEEDS="1 2 3 4 5",MAX_TICKS=10000000 scripts/sweep.slurm
 #
 # Or export variables first (equivalent, avoids quoting issues with spaces):
-#   CONFIG=maps/map_300_close_V1.json SEEDS="1 2 3 4 5" sbatch scripts/sweep.slurm
+#   CONFIG=maps/map_500_d05.json SEEDS="1 2 3 4 5" sbatch scripts/sweep.slurm
 #
 # To run sequentially instead of in parallel (e.g. if you only have 1 core):
-#   sbatch --export=ALL,CONFIG=maps/map_300_close_V1.json,MODE=sequential scripts/sweep.slurm
+#   sbatch --export=ALL,CONFIG=maps/map_500_d05.json,MODE=sequential scripts/sweep.slurm
 #   (also change --ntasks=1 below)
 #
 # The submit_all_maps.sh script calls this automatically when SLURM is detected.
@@ -21,7 +21,7 @@
 #   worlds/<env_name>/seed_<N>_world.json     — browser-loadable end-of-run snapshot
 # Predation maps (controls.deadTurnToFood=true) naturally land in their own
 # env folder because the env_name is derived from the map filename — e.g.
-# results/map_300_medium_V1_predation/seed_1.json. Existing outputs are
+# results/map_500_d05_predation/seed_1.json. Existing outputs are
 # skipped so re-submitting after a crash resumes the remaining seeds.
 # ─────────────────────────────────────────────────────────────────────────────
 

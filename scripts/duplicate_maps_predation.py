@@ -1,9 +1,14 @@
 """Duplicate every `maps/map_*.json` to a `_predation.json` sibling with
 `controls.deadTurnToFood = true`.
 
-The base maps (and their `_V1` starter-organism variants) are duplicated;
-files that already end in `_predation.json` are skipped so re-running is
-idempotent.
+LEGACY: `generate_maps.py` now emits `_predation` siblings directly, so this
+script is no longer part of the normal workflow. It is kept for one-off use on
+hand-made maps that were not produced by `generate_maps.py`. Running it on the
+generated maps is harmless — the `_predation` siblings already exist and are
+skipped.
+
+Base maps are duplicated; files that already end in `_predation.json` are
+skipped so re-running is idempotent.
 
 Run with:
     uv run scripts/duplicate_maps_predation.py

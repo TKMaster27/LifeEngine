@@ -1,6 +1,8 @@
 #!/bin/bash
 # ─────────────────────────────────────────────────────────────────────────────
-# Standalone Linux-server runner for all 9 cluster-spacing maps × N seeds.
+# Standalone Linux-server runner for the 500×500 cluster-spacing maps × N seeds.
+# Maps are discovered from disk (maps/map_500_d*.json), so the sweep adapts to
+# however many distance levels generate_maps.py produced (default d01…d10).
 # Runs every (map, seed) pair as an independent node process, bounded by
 # MAX_PARALLEL concurrent jobs.
 #
@@ -13,14 +15,18 @@
 #   MAX_PARALLEL=8 bash scripts/sweep_all_maps.sh          # cap at 8 concurrent
 #   SEEDS="1 2 3" bash scripts/sweep_all_maps.sh           # subset of seeds
 #   MAX_TICKS=1000000 bash scripts/sweep_all_maps.sh       # pilot sweep
-#   ONLY=300 bash scripts/sweep_all_maps.sh                # only one map size
+#   ONLY="d01 d05" bash scripts/sweep_all_maps.sh          # only these distance levels
 #   VARIANT=predation bash scripts/sweep_all_maps.sh       # sweep predation maps only
 #   VARIANT=both bash scripts/sweep_all_maps.sh            # both normal and predation
 #
-# Map variants — which set of starter-organism maps is swept:
-#   VARIANT=normal     (default)  → maps/map_<size>_<dist>_V1.json
-#   VARIANT=predation             → maps/map_<size>_<dist>_V1_predation.json
+# Map variants — which set of maps is swept:
+#   VARIANT=normal     (default)  → maps/map_500_dNN.json
+#   VARIANT=predation             → maps/map_500_dNN_predation.json
 #   VARIANT=both                  → both sets (doubles the workload)
+#
+# Each map MUST contain a starting organism (dropped in via the browser editor
+# and saved back to the same filename). Maps with an empty "organisms" array are
+# warned-and-skipped (they would extinct at tick 1).
 #
 # In tmux (survives SSH disconnect):
 #   tmux new -s sweep
@@ -33,13 +39,14 @@
 #   results/<env_name>/seed_<N>.json        — tracked simulation stats
 #   worlds/<env_name>/seed_<N>_world.json   — browser-loadable world snapshot
 # The env_name is taken from the map filename so predation runs are easy to
-# identify at a glance (e.g. results/map_300_far_V1_predation/seed_3.json).
+# identify at a glance (e.g. results/map_500_d05_predation/seed_3.json).
 #
 # Resumable: existing results/<env>/seed_<N>.json files are skipped so a
 # re-run picks up where it left off.
 # ─────────────────────────────────────────────────────────────────────────────
 
 set -u
+shopt -s nullglob
 
 # Bounded-concurrency dispatch uses `wait -n`, which needs bash >= 4.3 (2014).
 # Modern Linux has this; macOS does not (Apple ships bash 3.2).
@@ -50,9 +57,6 @@ if [ "${BASH_VERSINFO[0]:-0}" -lt 4 ] \
     echo "       On macOS: brew install bash, then run with /opt/homebrew/bin/bash."
     exit 1
 fi
-
-SIZES=(100 300 500)
-DISTANCES=(close medium far)
 
 SEEDS="${SEEDS:-1 2 3 4 5}"
 MAX_TICKS="${MAX_TICKS:-10000000}"
@@ -69,10 +73,20 @@ case "$VARIANT" in
     *) echo "ERROR: VARIANT must be 'normal', 'predation', or 'both' (got '$VARIANT')"; exit 2 ;;
 esac
 
-# Build the list of suffixes to sweep based on VARIANT
-SUFFIXES=()
-if [ "$VARIANT" = "normal" ] || [ "$VARIANT" = "both" ]; then SUFFIXES+=("_V1"); fi
-if [ "$VARIANT" = "predation" ] || [ "$VARIANT" = "both" ]; then SUFFIXES+=("_V1_predation"); fi
+# Normalise the ONLY filter (commas → spaces) into a lookup set of labels.
+ONLY="${ONLY//,/ }"
+
+# Does this map's distance label pass the ONLY filter? (empty ONLY = keep all)
+label_selected() {
+    local label="$1"
+    [ -z "$ONLY" ] && return 0
+    local tok num="${label#d}"; num="${num#0}"   # d05 → 5 for numeric matches
+    for tok in $ONLY; do
+        local tnum="${tok#d}"; tnum="${tnum#0}"
+        if [ "$tok" = "$label" ] || [ "$tnum" = "$num" ]; then return 0; fi
+    done
+    return 1
+}
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
@@ -85,27 +99,42 @@ fi
 mkdir -p logs results worlds
 RUN_ID="$(date +%Y%m%d-%H%M%S)-$$"
 
+# ─── Discover maps from disk and split into normal vs predation ──────────────
+ALL_MAPS=(maps/map_500_d*.json)
+if [ ${#ALL_MAPS[@]} -eq 0 ]; then
+    echo "ERROR: no maps/map_500_d*.json maps found — run generate_maps.py first."; exit 1
+fi
+
+MAPS=()
+for m in "${ALL_MAPS[@]}"; do
+    case "$m" in
+        *_predation.json) [ "$VARIANT" = "predation" ] || [ "$VARIANT" = "both" ] && MAPS+=("$m") ;;
+        *)                [ "$VARIANT" = "normal" ]    || [ "$VARIANT" = "both" ] && MAPS+=("$m") ;;
+    esac
+done
+
 # ─── Enumerate (map, seed) work items, skipping existing outputs ─────────────
 declare -a WORK
 SKIPPED=0
-for SIZE in "${SIZES[@]}"; do
-    if [ -n "$ONLY" ] && [ "$ONLY" != "$SIZE" ]; then continue; fi
-    for DIST in "${DISTANCES[@]}"; do
-        for SUF in "${SUFFIXES[@]}"; do
-            MAP="maps/map_${SIZE}_${DIST}${SUF}.json"
-            if [ ! -f "$MAP" ]; then
-                echo "WARN: skipping '$MAP' (file not found — run generate_maps.py / duplicate_maps_predation.py?)"; continue
-            fi
-            ENV_NAME="$(basename "$MAP" .json)"
-            mkdir -p "results/$ENV_NAME" "worlds/$ENV_NAME"
-            for S in $SEEDS; do
-                OUT="results/$ENV_NAME/seed_${S}.json"
-                if [ -f "$OUT" ]; then
-                    SKIPPED=$((SKIPPED + 1)); continue
-                fi
-                WORK+=("$MAP|$ENV_NAME|$S")
-            done
-        done
+for MAP in "${MAPS[@]}"; do
+    label=""
+    if [[ "$MAP" =~ map_500_(d[0-9]+) ]]; then label="${BASH_REMATCH[1]}"; fi
+    if ! label_selected "$label"; then continue; fi
+    if [ ! -f "$MAP" ]; then
+        echo "WARN: skipping '$MAP' (file not found)"; continue
+    fi
+    if grep -Eq '"organisms": *\[\]' "$MAP"; then
+        echo "WARN: '$MAP' has an empty organisms array — add a starting organism before running. Skipping."
+        continue
+    fi
+    ENV_NAME="$(basename "$MAP" .json)"
+    mkdir -p "results/$ENV_NAME" "worlds/$ENV_NAME"
+    for S in $SEEDS; do
+        OUT="results/$ENV_NAME/seed_${S}.json"
+        if [ -f "$OUT" ]; then
+            SKIPPED=$((SKIPPED + 1)); continue
+        fi
+        WORK+=("$MAP|$ENV_NAME|$S")
     done
 done
 
@@ -116,7 +145,8 @@ echo "=== sweep_all_maps ==="
 echo "Run ID:        $RUN_ID"
 echo "Host:          $(hostname)  ($NCPU cores)"
 echo "Node:          $NODE_BIN ($($NODE_BIN --version 2>/dev/null))"
-echo "Variant:       $VARIANT  (map suffixes: ${SUFFIXES[*]})"
+echo "Variant:       $VARIANT"
+[ -n "$ONLY" ] && echo "Only:          $ONLY"
 echo "Total runs:    $TOTAL  (skipped $SKIPPED already-complete)"
 echo "Max parallel:  $MAX_PARALLEL"
 echo "Max ticks:     $MAX_TICKS"

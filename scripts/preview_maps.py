@@ -1,5 +1,7 @@
-"""Render a 3x3 grid preview of the generated maps. One row per size, one
-column per distance level. Each food type is coloured differently.
+"""Render a grid preview of the generated 500x500 distance maps. One panel per
+distance level (d01 = closest clusters … dNN = farthest). Predation siblings are
+geometrically identical, so only the normal maps are shown. Each food type is
+coloured differently.
 
 Usage:
     uv run scripts/preview_maps.py
@@ -7,6 +9,8 @@ Usage:
 
 from __future__ import annotations
 import json
+import math
+import re
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -15,48 +19,64 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 MAPS_DIR  = REPO_ROOT / "maps"
 OUT       = REPO_ROOT / "maps" / "preview.png"
 
-SIZES = [100, 300, 500]
-DISTANCES = ["close", "medium", "far"]
+SIZE = 500
+DIST_RE = re.compile(r"^map_500_d(\d+)\.json$")
 
 # Food type -> colour, matching the analyzer's diet colours.
 FOOD_COLOURS = {1: "#FF69B4", 2: "#FF0000", 3: "#FFFF00"}
 
 
+def distance_maps() -> list[Path]:
+    """Normal 500 distance maps, sorted by distance index (d01, d02, …)."""
+    paths = [p for p in MAPS_DIR.glob("map_500_d*.json") if DIST_RE.match(p.name)]
+    return sorted(paths, key=lambda p: int(DIST_RE.match(p.name).group(1)))
+
+
 def main() -> None:
-    fig, axes = plt.subplots(len(SIZES), len(DISTANCES),
-                             figsize=(11, 11),
+    maps = distance_maps()
+    if not maps:
+        print("No map_500_dNN.json maps found — run generate_maps.py first.")
+        return
+
+    n = len(maps)
+    ncols = min(5, n)
+    nrows = math.ceil(n / ncols)
+    fig, axes = plt.subplots(nrows, ncols,
+                             figsize=(2.6 * ncols, 2.6 * nrows),
                              squeeze=False)
-    fig.suptitle("Cluster-spacing experiment maps", fontsize=14, fontweight="bold")
+    fig.suptitle("500×500 cluster-spacing maps (by distance)",
+                 fontsize=14, fontweight="bold")
 
-    for row, size in enumerate(SIZES):
-        for col, dist in enumerate(DISTANCES):
-            ax = axes[row][col]
-            path = MAPS_DIR / f"map_{size}_{dist}.json"
-            with path.open() as f:
-                env = json.load(f)
-            emitters = env["grid"]["emitters"]
-            # Marker size shrinks with map size so the checkerboard pattern is
-            # readable on the largest maps without obscuring it on small ones.
-            marker_size = max(2, 200 / size)
-            for t, colour in FOOD_COLOURS.items():
-                xs = [e["c"] for e in emitters if e["t"] == t]
-                ys = [e["r"] for e in emitters if e["t"] == t]
-                ax.scatter(xs, ys, c=colour, s=marker_size, edgecolors="none",
-                           label=f"type {t}")
-            ax.set_xlim(0, size)
-            ax.set_ylim(size, 0)  # invert so screen-y matches editor
-            ax.set_aspect("equal")
-            ax.set_title(f"{size}×{size} — {dist}", fontsize=10)
-            ax.set_xticks([0, size // 2, size])
-            ax.set_yticks([0, size // 2, size])
-            ax.tick_params(labelsize=7)
-            ax.grid(alpha=0.25, linestyle=":")
+    marker_size = max(2, 200 / SIZE)
+    for idx, ax in enumerate(axes.flat):
+        if idx >= n:
+            ax.axis("off")
+            continue
+        path = maps[idx]
+        with path.open() as f:
+            env = json.load(f)
+        emitters = env["grid"]["emitters"]
+        label = env.get("_meta", {}).get("distance", path.stem)
+        pairwise = env.get("_meta", {}).get("pairwise_distance")
+        for t, colour in FOOD_COLOURS.items():
+            xs = [e["c"] for e in emitters if e["t"] == t]
+            ys = [e["r"] for e in emitters if e["t"] == t]
+            ax.scatter(xs, ys, c=colour, s=marker_size, edgecolors="none",
+                       label=f"type {t}")
+        ax.set_xlim(0, SIZE)
+        ax.set_ylim(SIZE, 0)  # invert so screen-y matches editor
+        ax.set_aspect("equal")
+        title = f"{label}" + (f" — {pairwise:.0f} cells" if pairwise else "")
+        ax.set_title(title, fontsize=9)
+        ax.set_xticks([0, SIZE // 2, SIZE])
+        ax.set_yticks([0, SIZE // 2, SIZE])
+        ax.tick_params(labelsize=6)
+        ax.grid(alpha=0.25, linestyle=":")
 
-    # one shared legend in the upper-left corner
     handles, labels = axes[0][0].get_legend_handles_labels()
     fig.legend(handles, labels, loc="lower center", ncol=3, fontsize=9,
                frameon=False, bbox_to_anchor=(0.5, -0.005))
-    fig.tight_layout(rect=(0, 0.03, 1, 0.97))
+    fig.tight_layout(rect=(0, 0.03, 1, 0.96))
     fig.savefig(OUT, dpi=140, bbox_inches="tight")
     print(f"wrote {OUT.relative_to(REPO_ROOT)}")
 
