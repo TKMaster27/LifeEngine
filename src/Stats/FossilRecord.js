@@ -64,9 +64,29 @@ const FossilRecord = {
         }
         species.end_tick = this.env.total_ticks;
         species.ancestor = undefined; // garbage collect ancestors
+        // Free the heavy per-species objects we no longer need once a species is
+        // extinct. Over a long run (e.g. a 10M-tick headless sweep) tens of
+        // thousands of transient lineages go extinct, and retaining their anatomy
+        // and founder_brain forever is the dominant source of memory growth — it
+        // OOMs the V8 heap before the run finishes.
+        //
+        // anatomy is never serialized (SerializeHelper.copyNonObjects skips objects)
+        // and is only ever re-derived from a live organism on load, so dropping it
+        // for an extinct species is safe.
+        species.anatomy = undefined;
+        // founder_brain is only written to disk / exported for species that clear
+        // min_serialize_keep. For the far more numerous lineages below that
+        // threshold it is discarded at save time anyway, so free it now. When
+        // min_serialize_keep is null (the in-browser default) we keep every brain,
+        // preserving the original behaviour.
+        if (this.min_serialize_keep != null &&
+            (species.cumulative_pop || 0) < this.min_serialize_keep) {
+            species.founder_brain = undefined;
+        }
         delete this.extant_species[species.name];
-        // Always retain extinct species so their founder_brain survives extinction.
-        // min_discard is still used elsewhere to filter sparse species out of averages.
+        // Retain the (now lightweight) extinct species so survivors' founder_brain
+        // and diet metadata are still available at serialize time. min_discard is
+        // still used elsewhere to filter sparse species out of averages.
         this.extinct_species[species.name] = species;
         return species.cumulative_pop >= this.min_discard;
     },

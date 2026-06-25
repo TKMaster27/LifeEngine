@@ -237,6 +237,7 @@ while (env.total_ticks < MAX_TICKS && engine.running) {
             `[headless] tick=${env.total_ticks}/${MAX_TICKS}` +
             `  pop=${env.organisms.length}` +
             `  species=${FossilRecord.numExtantSpecies()}` +
+            `  extinct=${FossilRecord.numExtinctSpecies()}` +
             `  inst=${Math.round(interval_rate)} t/s` +
             `  avg=${Math.round(cumulative_rate)} t/s` +
             `  rss=${rss_mb.toFixed(0)}MB` +

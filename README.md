@@ -28,7 +28,7 @@ This is the second version of the
 | **Headless mode** | `src/headless.js` runs the simulation as a pure Node script with no canvas / DOM, writing a results JSON suitable for analysis. |
 | **Seeded RNG** | `src/Utils/Rng.js` wraps a seedable PRNG and replaces `Math.random()` throughout. Runs with the same `--seed` reproduce bit-for-bit. |
 | **Charts + CSV** | New `DietSpecializationChart` and `PopulationDietSpecializationChart` in the StatsPanel; every chart has a CSV download button. |
-| **Cluster-spacing maps** | 9 generated experiment maps in `maps/` (3 sizes × 3 inter-cluster distances). See [MAP_DESIGN.md](MAP_DESIGN.md). |
+| **Cluster-spacing maps** | 500×500 experiment maps in `maps/` across N inter-cluster distance levels (default 10: `map_500_d01…d10`, plus `_predation` siblings). See [MAP_DESIGN.md](MAP_DESIGN.md). |
 | **CHPC sweep** | `scripts/sweep.pbs` and `scripts/submit_all_maps.sh` run multi-seed sweeps on the UCT cluster. See [CHPC_GUIDE.md](CHPC_GUIDE.md) and [RUNNING_EXPERIMENTS.md](RUNNING_EXPERIMENTS.md). |
 | **Analysis** | `scripts/analyze_results.py` produces per-run plots (population, species, diet specialisation, per-species lineages). Driven via `uv`. |
 
@@ -38,7 +38,7 @@ This is the second version of the
 |---|---|
 | [BRAIN_REDESIGN.md](BRAIN_REDESIGN.md) | Architecture of the HyperNEAT-CTRNN brain and the phased migration from the old FSM |
 | [RESEARCH_READINESS_PLAN.md](RESEARCH_READINESS_PLAN.md) | What had to land for publication-grade 10M-tick runs (seeded RNG, lineage pruning, batch sweep, cross-run analysis) |
-| [MAP_DESIGN.md](MAP_DESIGN.md) | The 9 cluster-spacing maps — geometry, emitter design, regeneration |
+| [MAP_DESIGN.md](MAP_DESIGN.md) | The 500×500 cluster-spacing maps — geometry, emitter design, regeneration |
 | [RUNNING_EXPERIMENTS.md](RUNNING_EXPERIMENTS.md) | End-to-end workflow: generate → push → submit → pull → analyse |
 | [CHPC_GUIDE.md](CHPC_GUIDE.md) | One-time CHPC setup (NVM, Node 16, PBS) plus headless-flag reference |
 | [PERFORMANCE_OPTIMIZATIONS.md](PERFORMANCE_OPTIMIZATIONS.md) | Tier 1–3 DoD speedup roadmap, profiling references |
@@ -74,12 +74,12 @@ canvas, just a Node script that writes a results JSON.
 ```bash
 node src/headless.js \
     --max-ticks 1000000 \
-    --load      maps/map_300_medium.json \
+    --load      maps/map_500_d05.json \
     --seed      1 \
     --data-rate 1000 \
     --keep-min  50 \
-    --output    results/map_300_medium/seed_1.json \
-    --save-world results/map_300_medium/seed_1_world.json \
+    --output    results/map_500_d05/seed_1.json \
+    --save-world results/map_500_d05/seed_1_world.json \
     --log-every 50000
 ```
 
