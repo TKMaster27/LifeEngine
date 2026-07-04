@@ -23,8 +23,8 @@
 
 #PBS -N life_sweep
 #PBS -P CSCI1142
-#PBS -l walltime=06:00:00
-#PBS -l select=1:ncpus=5:mem=8gb
+#PBS -l walltime=12:00:00
+#PBS -l select=1:ncpus=5:mem=24gb
 #PBS -q normal
 #PBS -o logs/sweep_${PBS_JOBID}.out
 #PBS -e logs/sweep_${PBS_JOBID}.err
@@ -40,9 +40,11 @@
 : "${LOG_EVERY:=100000}"
 : "${MODE:=parallel}"             # parallel | sequential
 
-# ─── Paths (edit these to match your CHPC home) ──────────────────────────────
-NODE_BIN="/home/tmackay/.nvm/versions/node/v16.20.2/bin/node"
-PROJECT_DIR="/home/tmackay/LifeEngine"
+# ─── Paths (overridable via -v at qsub time) ─────────────────────────────────
+# Run from lustre scratch, not /home — a full /home quota crashes jobs mid-sweep
+# (the ~/lustre symlink points at lustre scratch on Lengau).
+NODE_BIN="${NODE_BIN:-/home/tmackay/.nvm/versions/node/v16.20.2/bin/node}"
+PROJECT_DIR="${PROJECT_DIR:-$HOME/lustre/LifeEngine}"
 
 # ─── Job info ────────────────────────────────────────────────────────────────
 echo "=== Job info ==="
