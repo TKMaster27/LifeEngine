@@ -33,7 +33,6 @@ Memory / performance notes (matters for full 10M-tick records, ~145 MB each):
 
 import os
 import json
-import glob
 import math
 from collections import defaultdict
 
@@ -371,32 +370,45 @@ def _file_sig(path):
         return (0.0, 0)
 
 
-def _seed_files(directory):
-    """List tracked-result seed files in a directory, excluding world snapshots."""
-    return sorted(
-        p for p in glob.glob(os.path.join(directory, "seed_*.json"))
-        if not p.endswith("_world.json")
-    )
-
-
 def discover_layout(folder):
     """Return (envs, flat) where envs is {env_name: [paths]} based on the
     results/<env>/seed_*.json convention, and flat is the bare top-level list.
-    Excludes any `seed_*_world.json` snapshots (those live under worlds/ in
-    the new layout but may persist in older results trees)."""
+
+    seed_*.json files are matched at *any* depth below `folder`, not just one
+    level down, so the layout still resolves when a download wraps the results
+    tree in an extra directory (e.g. results/results/<env>/seed_*.json, or an
+    archive that expanded one level deep). Each file is grouped under the name
+    of its *immediate parent* directory — the env name in the
+    results/<env>/seed_*.json convention — so the grouping is unchanged for the
+    normal one-level layout. Files sitting directly in `folder` are returned as
+    `flat` (any *.json there, for back-compat with loose result files).
+    `*_world.json` snapshots (which live under worlds/) are always excluded."""
     envs = {}
-    if os.path.isdir(folder):
-        for entry in sorted(os.listdir(folder)):
-            sub = os.path.join(folder, entry)
-            if os.path.isdir(sub):
-                seeds = _seed_files(sub)
-                if seeds:
-                    envs[entry] = seeds
-    flat = sorted(
-        p for p in glob.glob(os.path.join(folder, "*.json"))
-        if not p.endswith("_world.json")
-    )
-    return envs, flat
+    flat = []
+    if not os.path.isdir(folder):
+        return envs, flat
+    top = os.path.abspath(folder)
+    for root, dirs, files in os.walk(folder):
+        # Prune noise we never want to descend into, and keep traversal ordered.
+        dirs[:] = sorted(d for d in dirs
+                         if not d.startswith(".") and d != "node_modules")
+        if os.path.abspath(root) == top:
+            flat = sorted(
+                os.path.join(root, f) for f in files
+                if f.endswith(".json") and not f.endswith("_world.json")
+            )
+            continue
+        seeds = sorted(
+            os.path.join(root, f) for f in files
+            if f.startswith("seed_") and f.endswith(".json")
+            and not f.endswith("_world.json")
+        )
+        if seeds:
+            env = os.path.basename(root)
+            envs.setdefault(env, []).extend(seeds)
+    for env in envs:
+        envs[env].sort()
+    return dict(sorted(envs.items())), flat
 
 
 @st.cache_data(show_spinner="Reading summaries…")
