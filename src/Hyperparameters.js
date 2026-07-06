@@ -69,7 +69,7 @@ const Hyperparams = {
         this.foodDropProb = 0;
         this.altFoodTypeChance = 0.0;
         this.foodTypes = [
-            { id: 0, nutrition: 1.5},
+            { id: 0, nutrition: 3.0},
             { id: 1, nutrition: 1.0},
             { id: 2, nutrition: 1.0},
             { id: 3, nutrition: 1.0}

@@ -175,6 +175,11 @@ def build_map(size: int, distance_label: str, r_fraction: float,
     }
 
     controls = dict(template_controls)
+    # Inter-species predation: killer cells never harm conspecifics, so the
+    # corpse->meat loop is cross-species, not cannibalism (which would let a
+    # lineage farm its own kin and swamp the diet/geography signal). Applied to
+    # BOTH arms so predation vs normal still differs only by deadTurnToFood.
+    controls["dontKillSameSpecies"] = True
     if predation:
         controls["deadTurnToFood"] = True
 
@@ -186,6 +191,8 @@ def build_map(size: int, distance_label: str, r_fraction: float,
             "R_fraction":            r_fraction,
             "pairwise_distance":     round(r_fraction * size * math.sqrt(3), 1),
             "predation_enabled":     predation,
+            "dont_kill_same_species": True,
+            "meat_nutrition":        template_controls["foodTypes"][0]["nutrition"],
             "cluster_shape":         "hollow_ring",
             "cluster_radius":        radius,
             "ring_thickness":        1,

@@ -267,7 +267,10 @@ class Organism {
             var real_c = this.c + cell.rotatedCol(this.rotation);
             var real_r = this.r + cell.rotatedRow(this.rotation);
             if (Hyperparams.deadTurnToFood)
-                this.env.changeFoodCell(real_c, real_r, 0, 1.0);
+                // Meat is food type 0; honor its configured nutrition like every
+                // other food producer (EmitterCell/ProducerCell/etc.) rather than
+                // hardcoding a value.
+                this.env.changeFoodCell(real_c, real_r, 0, Hyperparams.getFoodNutrition(0));
             else
                 this.env.changeCell(real_c, real_r, CellStates.empty, null);
         }
