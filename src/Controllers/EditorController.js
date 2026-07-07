@@ -455,7 +455,7 @@ class EditorController extends CanvasController{
             'empty','food0','food1','food2','food3',
             'wall','mouth','producer','emitter',
             'mover','killer','armor','eye',
-            'dist','dx','dy'
+            'dist','dx','dy','sameSp'
         ];
         const INPUTS_PER_EYE = FEATURE_NAMES.length;
 
@@ -648,7 +648,7 @@ class EditorController extends CanvasController{
             'empty','food0','food1','food2','food3',
             'wall','mouth','producer','emitter',
             'mover','killer','armor','eye',
-            'dist','dx','dy',
+            'dist','dx','dy','sameSp',
         ];
         const INPUTS_PER_EYE = FEATURE_NAMES.length;
 

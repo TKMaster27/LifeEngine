@@ -40,8 +40,11 @@ const FEAT_ARMOR    = 11;
 const FEAT_EYE      = 12;
 const N_CELL_FEATURES = 13;
 
-// Inputs per eye: N_CELL_FEATURES one-hot + normalised distance + dx + dy = 16
-const INPUTS_PER_EYE = N_CELL_FEATURES + 3;
+// Extra per-eye scalar channels appended after the cell-type one-hot.
+const EXTRA_DISTANCE = 0, EXTRA_DX = 1, EXTRA_DY = 2, EXTRA_SPECIES = 3;
+const N_EXTRA = 4;
+// Inputs per eye: N_CELL_FEATURES one-hot + distance + dx + dy + species = 17
+const INPUTS_PER_EYE = N_CELL_FEATURES + N_EXTRA;
 
 function cellFeatureIndex(cell) {
     if (!cell || !cell.state || cell.state === CellStates.empty) return FEAT_EMPTY;
@@ -332,9 +335,17 @@ class NNBrain extends Brain {
             this.obs_buffer[base + i] = (i === feat) ? 1.0 : 0.0;
         }
         const norm = Hyperparams.lookRange || 300;
-        this.obs_buffer[base + N_CELL_FEATURES]     = Math.min(1.0, distance / norm);
-        this.obs_buffer[base + N_CELL_FEATURES + 1] = (dx || 0) / norm;
-        this.obs_buffer[base + N_CELL_FEATURES + 2] = (dy || 0) / norm;
+        this.obs_buffer[base + N_CELL_FEATURES + EXTRA_DISTANCE] = Math.min(1.0, distance / norm);
+        this.obs_buffer[base + N_CELL_FEATURES + EXTRA_DX]       = (dx || 0) / norm;
+        this.obs_buffer[base + N_CELL_FEATURES + EXTRA_DY]       = (dy || 0) / norm;
+        // Same/different-species of the seen organism: +1 same, -1 different,
+        // 0 if not a living foreign organism (food/wall/emitter/empty/self).
+        let sp = 0.0;
+        if (cell && cell.owner && cell.owner !== this.owner && cell.owner.living
+            && cell.owner.species && this.owner.species) {
+            sp = (cell.owner.species.name === this.owner.species.name) ? 1.0 : -1.0;
+        }
+        this.obs_buffer[base + N_CELL_FEATURES + EXTRA_SPECIES] = sp;
     }
 
     decide() {

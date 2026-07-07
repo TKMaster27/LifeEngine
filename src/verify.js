@@ -44,7 +44,7 @@ function assertClose(label, a, b, tol = 1e-5) {
     assert(label, Math.abs(a - b) < tol, `expected ${b}, got ${a}`);
 }
 
-const INPUTS_PER_EYE = NNBrain.INPUTS_PER_EYE; // 16
+const INPUTS_PER_EYE = NNBrain.INPUTS_PER_EYE; // 17 (13 cell-type one-hot + dist/dx/dy + species)
 
 function newOrg() { return new Organism(10, 10, mockEnv, null); }
 
@@ -62,25 +62,49 @@ console.log('\n── Phase-2 direct mode: substrate rebuild on cell addition/re
     assert('still 0 input nodes',      org.brain.genome.inputs.length  === 0);
 
     org.anatomy.addDefaultCell(CellStates.eye, -1, 0);
-    assert('1 eye + 1 mover → 16 input nodes', org.brain.genome.inputs.length === INPUTS_PER_EYE);
-    assert('genome seeded with 16 input→output connections',
+    assert(`1 eye + 1 mover → ${INPUTS_PER_EYE} input nodes`, org.brain.genome.inputs.length === INPUTS_PER_EYE);
+    assert(`genome seeded with ${INPUTS_PER_EYE} input→output connections`,
            org.brain.genome.numEnabledConnections() === INPUTS_PER_EYE);
     assert('no hidden nodes initially (pure NEAT minimal)', org.brain.genome.hiddens.length === 0);
 
     org.anatomy.addDefaultCell(CellStates.eye, 0, -1);
-    assert('2nd eye → 32 input nodes', org.brain.genome.inputs.length === INPUTS_PER_EYE * 2);
-    assert('new eye seeded with 16 new I→O connections',
+    assert(`2nd eye → ${INPUTS_PER_EYE * 2} input nodes`, org.brain.genome.inputs.length === INPUTS_PER_EYE * 2);
+    assert(`new eye seeded with ${INPUTS_PER_EYE} new I→O connections`,
            org.brain.genome.numEnabledConnections() === INPUTS_PER_EYE * 2);
 
     org.anatomy.addDefaultCell(CellStates.mover, 0, 1);
     assert('2nd mover → 2 output nodes', org.brain.genome.outputs.length === 2);
-    assert('connections doubled to cover both outputs (32 inputs × 2 outputs)',
+    assert(`connections doubled to cover both outputs (${INPUTS_PER_EYE * 2} inputs × 2 outputs)`,
            org.brain.genome.numEnabledConnections() === INPUTS_PER_EYE * 2 * 2);
 
     org.anatomy.removeCell(-1, 0);
-    assert('eye removed → 16 input nodes', org.brain.genome.inputs.length === INPUTS_PER_EYE);
-    assert('connections pruned to surviving inputs (16 × 2)',
+    assert(`eye removed → ${INPUTS_PER_EYE} input nodes`, org.brain.genome.inputs.length === INPUTS_PER_EYE);
+    assert(`connections pruned to surviving inputs (${INPUTS_PER_EYE} × 2)`,
            org.brain.genome.numEnabledConnections() === INPUTS_PER_EYE * 2);
+})();
+
+// ─── Species perception channel (same / different / none) ────────────────────
+console.log('\n── Species perception: eye reports same (+1), different (-1), none (0) ──');
+(function() {
+    const org = newOrg();
+    asDirect(org);
+    org.anatomy.addDefaultCell(CellStates.mouth, 0, 0);
+    org.anatomy.addDefaultCell(CellStates.mover, 1, 0);
+    org.anatomy.addDefaultCell(CellStates.eye, -1, 0);   // 1 eye → obs_buffer = INPUTS_PER_EYE
+    org.species = { name: 'A' };
+    const SPECIES_SLOT = INPUTS_PER_EYE - 1;              // species is the last per-eye channel
+
+    const sameCell = { state: CellStates.mouth, owner: { living: true, species: { name: 'A' } } };
+    org.brain.observe(sameCell, 5, 0, 0, 1, 0);
+    assertClose('same-species organism → +1', org.brain.obs_buffer[SPECIES_SLOT], 1.0);
+
+    const diffCell = { state: CellStates.mouth, owner: { living: true, species: { name: 'B' } } };
+    org.brain.observe(diffCell, 5, 0, 0, 1, 0);
+    assertClose('different-species organism → -1', org.brain.obs_buffer[SPECIES_SLOT], -1.0);
+
+    const foodCell = { state: CellStates.food, owner: null, foodType: 1 };
+    org.brain.observe(foodCell, 5, 0, 0, 1, 0);
+    assertClose('food (no owner) → 0', org.brain.obs_buffer[SPECIES_SLOT], 0.0);
 })();
 
 // ─── Save / load round-trip (direct mode) ───────────────────────────────────
