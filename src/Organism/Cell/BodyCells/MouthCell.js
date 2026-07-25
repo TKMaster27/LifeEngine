@@ -31,15 +31,21 @@ class MouthCell extends BodyCell{
             
             
             // Get the diet array ONCE
-            const edibleTypes = this.org.getEdibleFoodTypes(); 
+            const edibleTypes = this.org.getEdibleFoodTypes();
             const inDiet = edibleTypes.includes(n_cell.foodType);
-            
-            // Calculate efficiency based on array length
-            let efficiency = 0.05; // Default to wrong-food penalty
+
+            let efficiency = 0.05; // off-diet food is nearly indigestible
             if (inDiet) {
-                efficiency = edibleTypes.length > 1 ? (1 / Math.sqrt(edibleTypes.length)) : 1.0;
+                // Diet-breadth penalty applies to ALL diet types INCLUDING meat
+                // (type 0): eating meat + plant is a broader, more complex diet
+                // (a compromise "gut"), so it lowers per-bite efficiency like any
+                // other extra food type. Tunable a / n^p.
+                const n = edibleTypes.length;
+                efficiency = n > 1
+                    ? Hyperparams.dietPenaltyStrength / Math.pow(n, Hyperparams.dietPenaltyExponent)
+                    : 1.0;
             }
-            
+
 
 
             this.org.food_collected += baseNutrition * efficiency;
@@ -52,7 +58,13 @@ class MouthCell extends BodyCell{
     }
 
     initRandom(){
-        this.diet = Hyperparams.getRandomFoodTypeId();
+        // Conservative diet: bias a new mouth toward the organism's existing
+        // diet (see Organism.mutatedMouthDiet) so specialists don't drift into
+        // generalists every time a mouth is grown. Falls back to uniform random
+        // when the organism/anatomy isn't available yet.
+        this.diet = (this.org && typeof this.org.mutatedMouthDiet === "function")
+            ? this.org.mutatedMouthDiet()
+            : Hyperparams.getRandomFoodTypeId();
     }
 
     initInherit(parent) {

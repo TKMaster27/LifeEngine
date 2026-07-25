@@ -32,6 +32,7 @@ Memory / performance notes (matters for full 10M-tick records, ~145 MB each):
 """
 
 import os
+import re
 import json
 import math
 from collections import defaultdict
@@ -1122,6 +1123,154 @@ def render_overlay(envs, flat):
         f"to toggle. Each series is decimated to ~{TARGET_POINTS:,} points.")
 
 
+# ── Meat-nutrition sweep view ──────────────────────────────────────────────
+# Envs produced by scripts/generate_meat_sweep.py are named
+# ..._predation_meat<NNN>, where NNN = meat_nutrition * 100 (e.g. meat075 = 0.75).
+MEAT_ENV_RE = re.compile(r"_meat(\d+)$")
+EXPLODE_POP = 3000     # max pop above this flags the runaway recycling loop
+
+
+def _killer_share_over_time(b):
+    """Series indexed by tick: killer cells as % of the average anatomy.
+    (b["cells"] is the av_cell_counts long frame restricted to CELL_TYPES.)"""
+    cdf = b["cells"]
+    if cdf is None or cdf.empty:
+        return None
+    piv = (cdf.pivot_table(index="tick", columns="category", values="value", aggfunc="last")
+              .fillna(0))
+    total = piv.sum(axis=1).replace(0, np.nan)
+    killer = piv["killer"] if "killer" in piv.columns else pd.Series(0.0, index=piv.index)
+    return (killer / total * 100).rename("killer_pct")
+
+
+def _meat_pop_fraction(b):
+    """% of the final standing population whose species diet includes meat (type 0)."""
+    tbl = b["species_tbl"]
+    if tbl is None or tbl.empty or "final_pop" not in tbl.columns:
+        return None
+    pop = tbl["final_pop"].fillna(0)
+    total = pop.sum()
+    if not total:
+        return 0.0
+    eats_meat = tbl["diet"].apply(lambda d: isinstance(d, list) and 0 in d)
+    return float(pop[eats_meat].sum() / total * 100)
+
+
+def render_meat_sweep(envs):
+    meat_envs = {e: int(m.group(1)) / 100.0
+                 for e in envs if (m := MEAT_ENV_RE.search(e))}
+    if not meat_envs:
+        st.warning("No meat-sweep environments found. Expected "
+                   "`results/..._meat<NNN>/seed_*.json` — generate them with "
+                   "`scripts/generate_meat_sweep.py` and run the sweep first.")
+        return
+
+    st.subheader(f"Meat-nutrition sweep — {len(meat_envs)} meat value(s)")
+    st.caption(
+        "Sweeps `foodTypes[0].nutrition` (meat) on a predation map to locate where "
+        "**predators/scavengers emerge** and where the death→scavenge recycling loop tips "
+        "into **runaway growth**. Reproduction costs 1 food/cell and a corpse returns "
+        "`cells × meat`, so meat > **1.0** is energy-positive — expect the population to "
+        "blow up above the break-even line. **Predator signal** = killer-cell share of "
+        "anatomy (founders start with none); **scavenger signal** = share of the final "
+        "population whose species diet includes meat (type 0).")
+
+    thr_pct = st.slider("Predator threshold — killer-cell % of anatomy", 1, 25, 5,
+                        help="A meat value counts as 'has predators' when the mean "
+                             "killer-cell share reaches this; emergence tick is the first "
+                             "time it is crossed.")
+
+    rows, ts = [], []
+    for env, meat in sorted(meat_envs.items(), key=lambda kv: kv[1]):
+        for fp in envs[env]:
+            b = prepare(path=fp, name=os.path.basename(fp), sig=_file_sig(fp))
+            ks = _killer_share_over_time(b)
+            if ks is not None and len(ks):
+                tail = max(1, len(ks) // 10)
+                final_killer = float(ks.iloc[-tail:].mean())
+                over = ks[ks >= thr_pct]
+                emergence = int(over.index[0]) if len(over) else None
+            else:
+                final_killer, emergence = 0.0, None
+            sdf = b["scalars"]
+            max_pop = int(sdf["pop_counts"].max()) if "pop_counts" in sdf.columns else 0
+            rows.append({
+                "meat": meat, "seed": b["meta"].get("seed"),
+                "final_killer_pct": final_killer,
+                "emergence_tick": emergence,
+                "max_pop": max_pop,
+                "meat_diet_pct": _meat_pop_fraction(b) or 0.0,
+                "exploded": max_pop >= EXPLODE_POP,
+            })
+            if ks is not None and len(ks):
+                tf = ks.reset_index(); tf.columns = ["tick", "killer_pct"]
+                tf["meat"] = meat
+                ts.append(tf)
+
+    if not rows:
+        st.info("No completed seed results in the meat-sweep folders yet.")
+        return
+    df = pd.DataFrame(rows)
+    agg = (df.groupby("meat")
+             .agg(seeds=("seed", "count"),
+                  final_killer_pct=("final_killer_pct", "mean"),
+                  meat_diet_pct=("meat_diet_pct", "mean"),
+                  emergence_tick=("emergence_tick", "mean"),
+                  max_pop=("max_pop", "mean"),
+                  exploded=("exploded", "sum"))
+             .reset_index())
+
+    # Chart A — predator / scavenger emergence vs meat value
+    figA = go.Figure()
+    figA.add_trace(go.Scatter(x=agg["meat"], y=agg["final_killer_pct"], mode="lines+markers",
+                              name="Predators (killer-cell %)",
+                              line=dict(color="#F2317A", width=2.4)))
+    figA.add_trace(go.Scatter(x=agg["meat"], y=agg["meat_diet_pct"], mode="lines+markers",
+                              name="Scavengers (pop eating meat %)",
+                              line=dict(color="#1f77ff", width=2.4, dash="dash")))
+    figA.add_vline(x=1.0, line=dict(color="grey", dash="dot"),
+                   annotation_text="energy break-even", annotation_position="top")
+    figA.update_layout(xaxis_title="Meat nutrition", yaxis_title="% (mean across seeds)")
+
+    # Chart B — runaway onset (max population)
+    figB = go.Figure()
+    figB.add_trace(go.Scatter(x=agg["meat"], y=agg["max_pop"], mode="lines+markers",
+                              name="Max population", line=dict(color="#4e79a7", width=2.4)))
+    figB.add_vline(x=1.0, line=dict(color="grey", dash="dot"))
+    figB.add_hline(y=EXPLODE_POP, line=dict(color="crimson", dash="dot"),
+                   annotation_text="runaway", annotation_position="top left")
+    figB.update_layout(xaxis_title="Meat nutrition", yaxis_title="Max population (mean)")
+
+    c1, c2 = st.columns(2)
+    c1.plotly_chart(styled(figA, "Predator / scavenger emergence vs meat value"),
+                    use_container_width=True)
+    c2.plotly_chart(styled(figB, "Runaway onset — max population vs meat value"),
+                    use_container_width=True)
+
+    # Chart C — killer-cell share over time, one line per meat value (mean across seeds)
+    if ts:
+        big = pd.concat(ts, ignore_index=True)
+        mean_ts = big.groupby(["meat", "tick"], as_index=False)["killer_pct"].mean()
+        mean_ts["meat"] = mean_ts["meat"].map(lambda v: f"{v:.2f}")
+        figC = px.line(mean_ts, x="tick", y="killer_pct", color="meat",
+                       labels={"tick": "Tick", "killer_pct": "Killer-cell % of anatomy",
+                               "meat": "Meat"})
+        figC.update_traces(line_width=1.8)
+        st.plotly_chart(styled(figC, "When predators emerge — killer-cell share over time, by meat value"),
+                        use_container_width=True)
+
+    st.markdown("**Per-meat-value summary (mean across seeds)**")
+    show = agg.copy()
+    show["predators?"] = np.where(show["final_killer_pct"] >= thr_pct, "yes", "no")
+    show["exploded"] = show["exploded"].astype(int).astype(str) + "/" + show["seeds"].astype(str)
+    show = show[["meat", "seeds", "predators?", "emergence_tick", "final_killer_pct",
+                 "meat_diet_pct", "max_pop", "exploded"]]
+    st.dataframe(show.style.format({
+        "meat": "{:.2f}", "final_killer_pct": "{:.1f}", "meat_diet_pct": "{:.1f}",
+        "emergence_tick": "{:,.0f}", "max_pop": "{:,.0f}",
+    }), use_container_width=True, hide_index=True)
+
+
 # ── App shell ──────────────────────────────────────────────────────────────
 st.title("🧬 Life Engine Explorer")
 st.caption("Interactive viewer for headless simulation results. "
@@ -1153,7 +1302,7 @@ with st.sidebar:
     mode = st.radio(
         "View",
         ["Single seed", "Environment (mean ± SD)", "Overlay runs",
-         "Compare envs", "Summary (all runs)"],
+         "Compare envs", "Meat sweep", "Summary (all runs)"],
         index=0)
     st.divider()
     st.caption(
@@ -1170,6 +1319,8 @@ elif mode == "Environment (mean ± SD)":
     render_environment(envs)
 elif mode == "Compare envs":
     render_compare_envs(envs)
+elif mode == "Meat sweep":
+    render_meat_sweep(envs)
 elif mode == "Overlay runs":
     render_overlay(envs, flat)
 else:  # Single seed

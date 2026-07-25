@@ -46,6 +46,7 @@
 : "${KEEP_MIN:=50}"
 : "${LOG_EVERY:=100000}"
 : "${MODE:=parallel}"             # parallel | sequential
+: "${SUMMARY_EMAIL:=mcktar010@myuct.ac.za}"   # detailed end-of-job summary recipient
 
 # ─── Paths (edit these to match your home directory on this cluster) ─────────
 # If nvm is set up, source it so 'node' is in PATH.
@@ -153,6 +154,21 @@ echo "=== Sweep finished ==="
 echo "Elapsed: ${ELAPSED}s  ($(printf '%dh:%02dm' $((ELAPSED/3600)) $(((ELAPSED%3600)/60))))"
 echo "Failed seeds: $FAILED"
 echo "Date: $(date)"
+
+# ─── Detailed per-seed summary: always saved, best-effort emailed ────────────
+# The scheduler's own BEGIN/END/FAIL mail (see #SBATCH --mail-type) stays as the
+# reliable notification; this adds a rich per-seed report. Compute nodes on some
+# clusters can't send mail, so the summary is ALWAYS written to the results dir.
+SUMMARY_FILE="${RESULTS_DIR}/SUMMARY_${SLURM_JOB_ID}.txt"
+SUMMARY_BODY="$(python3 scripts/_job_summary.py "$RESULTS_DIR" \
+    env="$ENV_NAME" job="$SLURM_JOB_ID" config="$CONFIG" \
+    seeds="$SEEDS" max_ticks="$MAX_TICKS" elapsed_s="$ELAPSED" failed="$FAILED")"
+printf '%s\n' "$SUMMARY_BODY" | tee "$SUMMARY_FILE"
+SUBJECT="[LifeEngine] ${ENV_NAME} — $([ "$FAILED" -eq 0 ] && echo OK || echo "${FAILED} FAILED") (job ${SLURM_JOB_ID})"
+if   command -v mail     &>/dev/null; then printf '%s\n' "$SUMMARY_BODY" | mail  -s "$SUBJECT" "$SUMMARY_EMAIL" && echo "[summary] emailed to $SUMMARY_EMAIL" || echo "[summary] mail failed; saved $SUMMARY_FILE"
+elif command -v mailx    &>/dev/null; then printf '%s\n' "$SUMMARY_BODY" | mailx -s "$SUBJECT" "$SUMMARY_EMAIL" && echo "[summary] emailed to $SUMMARY_EMAIL" || echo "[summary] mailx failed; saved $SUMMARY_FILE"
+elif command -v sendmail &>/dev/null; then { printf 'To: %s\nSubject: %s\n\n' "$SUMMARY_EMAIL" "$SUBJECT"; printf '%s\n' "$SUMMARY_BODY"; } | sendmail -t && echo "[summary] emailed to $SUMMARY_EMAIL" || echo "[summary] sendmail failed; saved $SUMMARY_FILE"
+else echo "[summary] no mail tool (mail/mailx/sendmail) on this node — saved $SUMMARY_FILE"; fi
 
 # Exit non-zero if anything failed, so SLURM marks the job accordingly
 exit $FAILED

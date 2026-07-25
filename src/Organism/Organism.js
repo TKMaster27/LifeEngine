@@ -140,7 +140,7 @@ class Organism {
         if (this.calcRandomChance(Hyperparams.changeProb)){
             let cell = this.anatomy.getRandomCell();
             if (cell.state === CellStates.mouth && this.calcRandomChance(50)) {
-                cell.diet = Hyperparams.getRandomFoodTypeId();
+                cell.diet = this.mutatedMouthDiet();
                 changed = true;
             } else {
                 let state = CellStates.getRandomLivingType();
@@ -242,7 +242,33 @@ class Organism {
                 diets.add(cell.diet);
             }
         }
-        return diets.size > 1 ? 1 / Math.sqrt(diets.size) : 1.0;
+        // NOTE: the live per-bite efficiency is computed in
+        // MouthCell.eatNeighbor (which also handles off-diet food). This helper
+        // mirrors the diet-breadth penalty (a / n^p over ALL diet types,
+        // including meat/type-0) and is currently unused.
+        return diets.size > 1
+            ? Hyperparams.dietPenaltyStrength / Math.pow(diets.size, Hyperparams.dietPenaltyExponent)
+            : 1.0;
+    }
+
+    /** Diet for a mutating or newly-grown mouth. With
+     *  `dietMutationConservatism`% it copies one of the organism's existing
+     *  mouth diets (pulling toward a single specialisation and letting
+     *  specialists persist across mutations); otherwise it explores a uniform
+     *  random food type. Falls back to random when there is no existing mouth. */
+    mutatedMouthDiet() {
+        if (this.calcRandomChance(Hyperparams.dietMutationConservatism)) {
+            const existing = [];
+            for (const c of this.anatomy.cells) {
+                if (c.state === CellStates.mouth && typeof c.diet === "number") {
+                    existing.push(c.diet);
+                }
+            }
+            if (existing.length > 0) {
+                return existing[Math.floor(Math.random() * existing.length)];
+            }
+        }
+        return Hyperparams.getRandomFoodTypeId();
     }
 
     getEdibleFoodTypes() {

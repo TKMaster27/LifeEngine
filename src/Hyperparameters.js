@@ -21,6 +21,19 @@ const Hyperparams = {
         this.brainMutationChance = 25;
         this.mutationSymmetryChance = 10;
 
+        // ── Diet specialisation tuning ──────────────────────────────────────
+        // A generalist's food-absorption efficiency is `a / n^p` for a diet of
+        // n>1 food types (a specialist, n==1, always gets 1.0). `a` =
+        // dietPenaltyStrength and `p` = dietPenaltyExponent tune how steeply
+        // broad diets are penalised. p=0.5 reproduces the old 1/sqrt(n); p=1 is
+        // 1/n (steeper). Lower `a` widens the specialist advantage further.
+        this.dietPenaltyStrength  = 1.0;   // a
+        this.dietPenaltyExponent  = 0.5;   // p  (was effectively 0.5)
+        // When a mouth's diet mutates or a new mouth is grown, with this %
+        // chance it copies an existing mouth's diet (pulling the organism toward
+        // one specialisation) instead of picking a uniform-random food type.
+        this.dietMutationConservatism = 50;
+
         this.foodBlocksReproduction = true;
         this.moversCanProduce = false;
 
@@ -69,7 +82,7 @@ const Hyperparams = {
         this.foodDropProb = 0;
         this.altFoodTypeChance = 0.0;
         this.foodTypes = [
-            { id: 0, nutrition: 1.0},
+            { id: 0, nutrition: 1.5},
             { id: 1, nutrition: 1.0},
             { id: 2, nutrition: 1.0},
             { id: 3, nutrition: 1.0}
