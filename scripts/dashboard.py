@@ -16,11 +16,17 @@ By default it looks in ./results — the same layout the CHPC sweep produces:
     ├── map_500_d02/
     └── ...
 
-Four views:
+Views:
     Single seed      — every chart from analyze_results.py, interactive
     Overlay runs     — overlay any chosen runs on a single metric
     Environment      — mean ± SD bands across seeds within one environment
     Compare envs     — side-by-side env summaries (extinction, richness, etc.)
+    Diet-penalty     — the a/n^p sweep: specialisation vs. penalty steepness,
+                       and what the steepness costs the population
+    Morphology       — the random-environment sweep: does a harder landscape
+                       build a more complex organism?
+    Meat sweep       — predator/scavenger emergence vs. meat nutrition
+    Summary          — every run in the folder, one row each
 
 Memory / performance notes (matters for full 10M-tick records, ~145 MB each):
   - Files parse to ~400 MB in RAM. We parse ONCE, extract only the compact
@@ -29,6 +35,9 @@ Memory / performance notes (matters for full 10M-tick records, ~145 MB each):
   - Time series are decimated to TARGET_POINTS for display.
   - The cross-seed / cross-env summary view reads ONLY the cheap top-level
     summary fields (via ijson if installed) — never the 145 MB body.
+  - The two sweep views summarise 50-180 seeds at once, so they never take the
+    full-parse route at all: each seed is streamed with ijson and reduced to a
+    few dozen numbers, cached to disk (see sweep_seed_stats).
 """
 
 import os
@@ -1271,6 +1280,751 @@ def render_meat_sweep(envs):
     }), use_container_width=True, hide_index=True)
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# Multi-environment sweep views (diet penalty, random-environment morphology)
+# ═══════════════════════════════════════════════════════════════════════════
+# These two pages summarise a whole sweep at once — 10 environments x 5 seeds
+# for the diet penalty, 36 x 5 for the random environments. They therefore must
+# NOT go through prepare(): that parses a full 145 MB seed into ~400 MB of
+# Python objects, which is fine for one file and fatal for 180.
+#
+# Instead every seed is reduced to a few dozen numbers by sweep_seed_stats(),
+# which streams the file with ijson and only materialises the small sub-trees it
+# actually needs:
+#   fossil_record.window_records  — the trailing snapshot window; all the
+#                                   morphology/brain series we tail-average
+#   fossil_record.species         — final standing population + mouth_diets
+# Peak memory is a few MB per file instead of 400, and the result is cached to
+# disk, so a results folder is paid for once rather than once per session.
+#
+# The definitions here deliberately mirror scripts/analyze_diet_sweep.py and
+# scripts/analyze_random_sweep.py so the dashboard and the CLI report the same
+# numbers.
+
+MEAT_TYPE = 0
+TAIL_FRAC = 0.10          # "settled value" = mean over the last 10% of samples
+
+# Arms: CVD-validated pair (protan/deutan/tritan dE >= 21), same as the scripts.
+ARM_COLOR = {"normal": "#0072B2", "predation": "#D55E00"}
+ARM_DASH  = {"normal": "solid",   "predation": "dash"}
+# Ordered factors get sequential single-hue ramps — magnitude, not category.
+SCARCITY_RAMP = ["#9dc3e6", "#3d7ebf", "#12436d"]
+PENALTY_RAMP  = ["#c6dbef", "#9ecae1", "#6baed6", "#3182bd", "#08519c"]
+
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+# Env naming conventions, straight from the generators.
+DIET_ENV_RE = re.compile(r"_dietp(\d+)(?:a(\d+))?$")                       # generate_diet_sweep.py
+RAND_ENV_RE = re.compile(r"^rand_(\d+)_r(\d+)_e(\d+)(?:_n(\d+))?(_predation)?$")  # generate_random_maps.js
+
+# Series we tail-average out of window_records.
+WIN_KEYS = ("tick_record", "pop_counts", "species_counts", "av_cells",
+            "av_cell_counts", "av_connections", "av_hidden_nodes")
+
+
+def _tail_mean(series, frac=TAIL_FRAC):
+    vals = [v for v in series if isinstance(v, (int, float))]
+    if not vals:
+        return None
+    n = max(1, int(len(vals) * frac))
+    return sum(vals[-n:]) / n
+
+
+def _cell_mix(counts_series, frac=TAIL_FRAC):
+    """Tail-averaged av_cell_counts -> (richness, entropy_bits, shares).
+
+    Entropy is the point: a body of four mouths and a body of
+    mouth+mover+eye+killer have the same cell count but are not equally
+    complex, and only the composition distinguishes them."""
+    dicts = [c for c in counts_series if isinstance(c, dict) and c]
+    if not dicts:
+        return None, None, {}
+    n = max(1, int(len(dicts) * frac))
+    acc = defaultdict(float)
+    for d in dicts[-n:]:
+        for k, v in d.items():
+            if isinstance(v, (int, float)):
+                acc[k] += v / n
+    total = sum(acc.values())
+    if total <= 0:
+        return 0, 0.0, {}
+    shares   = {k: v / total for k, v in acc.items()}
+    richness = sum(1 for v in acc.values() if v >= 0.05)   # types in a typical body
+    entropy  = -sum(p * math.log2(p) for p in shares.values() if p > 0)
+    return richness, entropy, shares
+
+
+def _pick(path, prefix):
+    """First value at `prefix`, streamed. Returning from inside the `with` tears
+    the parser down, so a prefix early in the file costs only the bytes up to
+    it — `records.tick_record` is nearly free, `species` reads the whole file."""
+    with open(path, "rb") as f:
+        for v in ijson.items(f, prefix, use_float=True):
+            return v
+    return None
+
+
+def _reduce_seed(summary, win, species):
+    """The shared reduction: one seed -> a flat dict of scalars."""
+    richness, entropy, shares = _cell_mix(win.get("av_cell_counts") or [])
+
+    live  = [s for s in (species or {}).values() if (s.get("population") or 0) > 0]
+    total = sum(s["population"] for s in live)
+
+    plant_breadth = total_breadth = specialists = meat_pop = 0.0
+    breadth_pop = defaultdict(float)
+    plant_types = set()
+    for s in live:
+        pop    = s["population"]
+        diets  = set(s.get("mouth_diets") or [])
+        plants = diets - {MEAT_TYPE}
+        plant_breadth += pop * len(plants)
+        total_breadth += pop * max(len(diets), 1)
+        specialists   += pop if len(plants) == 1 else 0
+        meat_pop      += pop if MEAT_TYPE in diets else 0
+        breadth_pop[len(plants)] += pop
+        plant_types |= plants
+
+    ext_tick = summary.get("extinction_tick")
+    out = {
+        "seed":            summary.get("seed"),
+        "total_ticks":     summary.get("total_ticks"),
+        "extinct":         ext_tick is not None,
+        "extinction_tick": ext_tick,
+        "final_pop":       summary.get("final_population") or 0,
+        "final_species":   summary.get("final_species") or 0,
+        "ticks_per_second": summary.get("ticks_per_second"),
+        # morphology
+        "av_cells":      _tail_mean(win.get("av_cells") or []),
+        "cell_richness": richness,
+        "cell_entropy":  entropy,
+        # brain
+        "connections":  _tail_mean(win.get("av_connections") or []),
+        "hidden_nodes": _tail_mean(win.get("av_hidden_nodes") or []),
+        # diversity
+        "species_count": _tail_mean(win.get("species_counts") or []),
+        "pop":           _tail_mean(win.get("pop_counts") or []),
+        # diet — plant breadth EXCLUDES meat: single-cluster founders can only
+        # specialise on plants, and a scavenging plant specialist would
+        # otherwise be mislabelled a generalist (see analyze_diet_sweep.py).
+        "plant_breadth":  (plant_breadth / total) if total else None,
+        "total_breadth":  (total_breadth / total) if total else None,
+        "specialist_pct": (100 * specialists / total) if total else None,
+        "meat_pct":       (100 * meat_pop / total) if total else None,
+        "plant_types":    sorted(plant_types),
+    }
+    for t in CELL_TYPES:
+        out[f"{t}_pct"] = 100 * shares.get(t, 0.0)
+    for n in range(4):
+        out[f"breadth{n}_pct"] = (100 * breadth_pop.get(n, 0.0) / total) if total else None
+    return out
+
+
+@st.cache_data(show_spinner=False, persist="disk", max_entries=4000)
+def sweep_seed_stats(path, sig=None):
+    """One seed -> a small dict of settled metrics. Disk-persisted and keyed on
+    the file's (mtime, size), so re-opening the dashboard is instant and a
+    re-run seed is re-read automatically."""
+    try:
+        if HAVE_IJSON:
+            summary = _summary_ijson(path)          # early-exits: precedes fossil_record
+            win     = _pick(path, "fossil_record.window_records") or {}
+            if not win:   # pre-window_records files: pull the arrays individually
+                win = {k: (_pick(path, f"fossil_record.records.{k}") or [])
+                       for k in WIN_KEYS}
+            species = _pick(path, "fossil_record.species") or {}
+        else:
+            with open(path) as f:
+                d = json.load(f)
+            fr      = d.get("fossil_record", {}) or {}
+            summary = {k: d.get(k) for k in SUMMARY_KEYS}
+            win     = fr.get("window_records") or fr.get("records") or {}
+            species = fr.get("species") or {}
+        return _reduce_seed(summary, win, species)
+    except Exception:
+        return None
+
+
+@st.cache_data(show_spinner=False, persist="disk", max_entries=4000)
+def diet_timeseries(path, sig=None):
+    """Honest specialisation-over-time series for one seed.
+
+    population_diet_counts would be cheaper, but it buckets *any* 2+ type diet
+    as "generalist", so a plant specialist that also scavenges meat is
+    mislabelled. Joining species_populations to species_diets fixes that. Each
+    snapshot is reduced to two floats as it arrives, so the full
+    ~10k x N-species history never exists in memory at once."""
+    try:
+        if HAVE_IJSON:
+            diets = _pick(path, "fossil_record.species_diets") or {}
+            ticks = _pick(path, "fossil_record.records.tick_record") or []
+            snaps = None
+        else:
+            with open(path) as f:
+                d = json.load(f)
+            fr    = d.get("fossil_record", {}) or {}
+            diets = fr.get("species_diets") or {}
+            ticks = (fr.get("records") or {}).get("tick_record") or []
+            snaps = (fr.get("records") or {}).get("species_populations") or []
+        if not ticks:
+            return None
+
+        plants_of = {name: set(dl or []) - {MEAT_TYPE} for name, dl in diets.items()}
+        spec_pct, breadth = [], []
+
+        def consume(snap):
+            tot = sp = br = 0.0
+            for name, pop in (snap or {}).items():
+                if not pop:
+                    continue
+                k = len(plants_of.get(name, ()))
+                tot += pop
+                br  += pop * k
+                sp  += pop if k == 1 else 0
+            spec_pct.append(100 * sp / tot if tot else None)
+            breadth.append(br / tot if tot else None)
+
+        if snaps is None:
+            with open(path, "rb") as f:
+                for snap in ijson.items(
+                        f, "fossil_record.records.species_populations.item",
+                        use_float=True):
+                    consume(snap)
+        else:
+            for snap in snaps:
+                consume(snap)
+
+        n = min(len(ticks), len(spec_pct))
+        if not n:
+            return None
+        step = max(1, math.ceil(n / TARGET_POINTS))
+        return pd.DataFrame({
+            "tick":           list(ticks[:n])[::step],
+            "specialist_pct": spec_pct[:n][::step],
+            "plant_breadth":  breadth[:n][::step],
+        })
+    except Exception:
+        return None
+
+
+@st.cache_data(show_spinner=False)
+def map_meta(subdir):
+    """{map stem: _meta} for every map in maps/<subdir>. The generators record
+    MEASURED landscape properties there (mean distance to food, island count,
+    open regions), which make far better x-axes than the nominal settings."""
+    out = {}
+    d = os.path.join(REPO_ROOT, "maps", subdir)
+    if not os.path.isdir(d):
+        return out
+    for fn in sorted(os.listdir(d)):
+        if not fn.endswith(".json"):
+            continue
+        try:
+            with open(os.path.join(d, fn)) as f:
+                out[fn[:-5]] = (json.load(f) or {}).get("_meta", {}) or {}
+        except Exception:
+            continue
+    return out
+
+
+def collect_seed_stats(envs, names, label_fn):
+    """-> one row per seed file, labelled with its sweep coordinates."""
+    files = [(e, p) for e in names for p in envs[e]]
+    if not files:
+        return pd.DataFrame()
+    rows = []
+    prog = st.progress(0.0, text="Reading seed results…")
+    for i, (env, p) in enumerate(files, 1):
+        s = sweep_seed_stats(p, _file_sig(p))
+        if s:
+            rows.append({"env": env, "file": os.path.basename(p), "path": p,
+                         **label_fn(env), **s})
+        prog.progress(i / len(files), text=f"Reading seed results… {i}/{len(files)}")
+    prog.empty()
+    return pd.DataFrame(rows)
+
+
+def aggregate_seeds(df, keys, metrics):
+    """Survival over ALL seeds; every other metric over SURVIVING seeds only.
+
+    An extinct run has no standing population to measure — averaging its zeros
+    in would read as "smaller organisms" rather than "no organisms". Same
+    convention as the CLI analysers, which is why the two agree."""
+    # dict.fromkeys dedupes while preserving order — the caller may legitimately
+    # pass the same column twice (e.g. a chart whose x-axis IS one of the facets).
+    keys    = list(dict.fromkeys(k for k in keys if k in df.columns))
+    metrics = [m for m in metrics if m in df.columns and m not in keys]
+    base = (df.groupby(keys, as_index=False, dropna=False)
+              .agg(seeds=("seed", "count"), extinct_n=("extinct", "sum")))
+    base["extinct_pct"] = 100 * base["extinct_n"] / base["seeds"].replace(0, np.nan)
+    surv = df[~df["extinct"]]
+    if surv.empty:
+        for m in metrics:
+            base[m] = np.nan
+            base[f"{m}_sd"] = np.nan
+        return base
+    spec = {}
+    for m in metrics:
+        spec[m] = (m, "mean")
+        spec[f"{m}_sd"] = (m, "std")
+    return base.merge(surv.groupby(keys, as_index=False, dropna=False).agg(**spec),
+                      on=keys, how="left")
+
+
+def _band_series(fig, x, y, sd, name, color, dash="solid", showlegend=True):
+    """A mean line with a ±1 SD ribbon, in one colour."""
+    x, y = np.asarray(x, float), np.asarray(y, float)
+    sd = np.asarray(sd, float)
+    if sd.shape != y.shape:            # column absent, or a single-seed group
+        sd = np.zeros_like(y)
+    ok = ~np.isnan(y)
+    if not ok.any():
+        return
+    x, y, sd = x[ok], y[ok], np.nan_to_num(sd[ok])
+    c = color.lstrip("#")
+    rgba = f"rgba({int(c[0:2],16)},{int(c[2:4],16)},{int(c[4:6],16)},0.15)"
+    if (sd > 0).any():
+        fig.add_traces([
+            go.Scatter(x=x, y=y + sd, line=dict(width=0), showlegend=False,
+                       hoverinfo="skip", legendgroup=name),
+            go.Scatter(x=x, y=y - sd, line=dict(width=0), fill="tonexty",
+                       fillcolor=rgba, showlegend=False, hoverinfo="skip",
+                       legendgroup=name),
+        ])
+    fig.add_trace(go.Scatter(x=x, y=y, name=name, mode="lines+markers",
+                             legendgroup=name, showlegend=showlegend,
+                             line=dict(color=color, width=2.4, dash=dash),
+                             marker=dict(size=8)))
+
+
+# ── Diet-penalty sweep view ────────────────────────────────────────────────
+def label_diet(env):
+    m = DIET_ENV_RE.search(env)
+    if not m:
+        return {}
+    return {"p": int(m.group(1)) / 100.0,
+            "a": (int(m.group(2)) / 100.0) if m.group(2) else 1.0,
+            "arm": "predation" if "_predation_" in env else "normal"}
+
+
+def render_diet_sweep(envs):
+    diet_envs = sorted(e for e in envs if DIET_ENV_RE.search(e))
+    if not diet_envs:
+        st.warning(
+            "No diet-penalty environments found. Expected "
+            "`results/..._dietp<NNN>/seed_*.json` (NNN = exponent × 100) — build "
+            "them with `scripts/generate_diet_sweep.py` and run "
+            "`scripts/submit_diet_sweep.sh`.")
+        return
+
+    st.subheader(f"Diet-penalty sweep — {len(diet_envs)} variant(s)")
+    st.caption(
+        "A mouth that eats **n** food types feeds at efficiency **a / nᵖ** "
+        "(specialists, n=1, always feed at 1.0). Sweeping **p** on the d05 map "
+        "asks how steep the cost of being a generalist has to be before "
+        "specialists take over — and what that costs the population. "
+        "The headline metric counts **plant** diet types only (meat excluded): "
+        "founders sit on a single food cluster, so plants are the axis "
+        "specialisation can act on, and a plant specialist that also scavenges "
+        "would otherwise be mislabelled a generalist.")
+
+    arms = sorted({label_diet(e).get("arm", "normal") for e in diet_envs})
+    c1, c2 = st.columns([2, 3])
+    pick_arms = c1.multiselect("Arms", arms, default=arms)
+    show_ts = c2.checkbox(
+        "Load specialisation-over-time (slower — reads the full history of each seed)",
+        value=False)
+    if not pick_arms:
+        st.info("Select at least one arm.")
+        return
+    use = [e for e in diet_envs if label_diet(e).get("arm") in pick_arms]
+
+    df = collect_seed_stats(envs, use, label_diet)
+    if df.empty:
+        st.info("No readable seed results in the diet-sweep folders yet.")
+        return
+
+    METRICS = ["specialist_pct", "plant_breadth", "total_breadth", "meat_pct",
+               "final_pop", "final_species", "species_count", "av_cells",
+               "breadth0_pct", "breadth1_pct", "breadth2_pct", "breadth3_pct"]
+    agg = aggregate_seeds(df, ["arm", "p"], METRICS).sort_values(["arm", "p"])
+
+    m = st.columns(4)
+    m[0].metric("Variants with results", df["env"].nunique())
+    m[1].metric("Seeds read", len(df))
+    m[2].metric("Extinct seeds", f"{int(df['extinct'].sum())}/{len(df)}")
+    span = agg["specialist_pct"].max() - agg["specialist_pct"].min()
+    m[3].metric("Specialist swing across p",
+                f"{span:.0f} pp" if pd.notna(span) else "—",
+                help="Difference between the highest and lowest mean plant-specialist "
+                     "share across the sweep — how much the penalty moved the outcome.")
+
+    # A — does the penalty actually drive specialisation?
+    figA = go.Figure()
+    figB = go.Figure()
+    for arm in pick_arms:
+        sub = agg[agg["arm"] == arm].sort_values("p")
+        _band_series(figA, sub["p"], sub["specialist_pct"], sub["specialist_pct_sd"],
+                     arm, ARM_COLOR[arm], ARM_DASH[arm])
+        _band_series(figB, sub["p"], sub["plant_breadth"], sub["plant_breadth_sd"],
+                     arm, ARM_COLOR[arm], ARM_DASH[arm])
+    figA.update_layout(xaxis_title="Diet-penalty exponent  p", yaxis_title="%",
+                       yaxis_range=[-2, 102])
+    figB.update_layout(xaxis_title="Diet-penalty exponent  p",
+                       yaxis_title="Plant types per organism")
+    figB.add_hline(y=1.0, line=dict(color="grey", dash="dot"),
+                   annotation_text="pure specialist", annotation_position="bottom right")
+    c1, c2 = st.columns(2)
+    c1.plotly_chart(styled(figA, "Plant specialists — % of the final population"),
+                    use_container_width=True)
+    c2.plotly_chart(styled(figB, "Plant-diet breadth (population-weighted)"),
+                    use_container_width=True)
+
+    # B — what the penalty costs
+    figC = go.Figure()
+    figD = go.Figure()
+    for arm in pick_arms:
+        sub = agg[agg["arm"] == arm].sort_values("p")
+        _band_series(figC, sub["p"], sub["final_pop"], sub["final_pop_sd"],
+                     arm, ARM_COLOR[arm], ARM_DASH[arm])
+        figD.add_trace(go.Bar(x=sub["p"], y=sub["extinct_pct"], name=arm,
+                              marker_color=ARM_COLOR[arm],
+                              customdata=np.stack([sub["extinct_n"], sub["seeds"]], -1),
+                              hovertemplate="p=%{x}<br>%{customdata[0]}/%{customdata[1]} "
+                                            "seeds extinct<extra></extra>"))
+    figC.update_layout(xaxis_title="Diet-penalty exponent  p",
+                       yaxis_title="Final population (surviving seeds)")
+    figD.update_layout(xaxis_title="Diet-penalty exponent  p",
+                       yaxis_title="Seeds extinct (%)", barmode="group",
+                       yaxis_range=[0, 105], hovermode="closest")
+    c1, c2 = st.columns(2)
+    c1.plotly_chart(styled(figC, "Carrying capacity — the cost of a steeper penalty"),
+                    use_container_width=True)
+    c2.plotly_chart(styled(figD, "Extinction — recorded, not excluded"),
+                    use_container_width=True)
+
+    # C — the full breadth distribution, not just the specialist share
+    bcols = [("breadth1_pct", "1 plant type (specialist)", "#08519c"),
+             ("breadth2_pct", "2 plant types",             "#6baed6"),
+             ("breadth3_pct", "3 plant types",             "#c6dbef"),
+             ("breadth0_pct", "no plant diet (meat only / no mouth)", "#bdbdbd")]
+    figE = go.Figure()
+    for arm in pick_arms:
+        sub = agg[agg["arm"] == arm].sort_values("p")
+        for col, lab, colour in bcols:
+            if col not in sub:
+                continue
+            figE.add_trace(go.Bar(
+                x=[[arm] * len(sub), [f"{v:g}" for v in sub["p"]]], y=sub[col],
+                name=lab, marker_color=colour, legendgroup=lab,
+                showlegend=(arm == pick_arms[0])))
+    figE.update_layout(barmode="stack", yaxis_title="% of final population",
+                       xaxis_title="arm · diet-penalty exponent p")
+    st.plotly_chart(styled(figE, "Where the population sits on the breadth axis"),
+                    use_container_width=True)
+
+    # D — when specialisation locks in (optional: needs the full history)
+    if show_ts:
+        frames = []
+        files = list(df[["env", "p", "arm", "path"]].itertuples(index=False))
+        prog = st.progress(0.0, text="Reading full histories…")
+        for i, row in enumerate(files, 1):
+            ts = diet_timeseries(row.path, _file_sig(row.path))
+            if ts is not None and not ts.empty:
+                ts = ts.copy()
+                ts["p"], ts["arm"] = row.p, row.arm
+                frames.append(ts)
+            prog.progress(i / len(files), text=f"Reading full histories… {i}/{len(files)}")
+        prog.empty()
+        if frames:
+            big = pd.concat(frames, ignore_index=True)
+            for arm in pick_arms:
+                a = big[big["arm"] == arm]
+                if a.empty:
+                    continue
+                mean_ts = a.groupby(["p", "tick"], as_index=False)["specialist_pct"].mean()
+                ps = sorted(mean_ts["p"].unique())
+                fig = go.Figure()
+                for i, pv in enumerate(ps):
+                    s = mean_ts[mean_ts["p"] == pv]
+                    colour = PENALTY_RAMP[min(int(i * len(PENALTY_RAMP) / max(len(ps), 1)),
+                                              len(PENALTY_RAMP) - 1)]
+                    fig.add_trace(go.Scatter(x=s["tick"], y=s["specialist_pct"],
+                                             name=f"p = {pv:g}", mode="lines",
+                                             line=dict(color=colour, width=2)))
+                fig.update_layout(xaxis_title="Tick",
+                                  yaxis_title="Plant specialists (% of population)",
+                                  yaxis_range=[-2, 102])
+                st.plotly_chart(
+                    styled(fig, f"When specialisation locks in — {arm} arm "
+                                f"(mean across seeds)"),
+                    use_container_width=True)
+        else:
+            st.info("No full histories could be read for the time-series view.")
+
+    # Table — mirrors scripts/analyze_diet_sweep.py
+    st.markdown("**Per-variant summary** (survival over all seeds, everything "
+                "else over surviving seeds)")
+    show = agg.copy()
+    show["efficiency at n=2"] = 1.0 / (2 ** show["p"])
+    show["extinct"] = (show["extinct_n"].astype(int).astype(str) + "/"
+                       + show["seeds"].astype(str))
+    types = (df.groupby(["arm", "p"])["plant_types"]
+               .apply(lambda s: "".join(str(t) for t in sorted(set().union(*s))) or "—")
+               .rename("plant types").reset_index())
+    show = show.merge(types, on=["arm", "p"], how="left")
+    cols = ["arm", "p", "efficiency at n=2", "seeds", "extinct", "final_pop",
+            "plant_breadth", "specialist_pct", "total_breadth", "meat_pct",
+            "final_species", "plant types"]
+    st.dataframe(
+        show[[c for c in cols if c in show.columns]].style.format({
+            "p": "{:.2f}", "efficiency at n=2": "{:.2f}", "final_pop": "{:,.0f}",
+            "plant_breadth": "{:.2f}", "specialist_pct": "{:.1f}",
+            "total_breadth": "{:.2f}", "meat_pct": "{:.1f}",
+            "final_species": "{:.1f}"}, na_rep="—"),
+        use_container_width=True, hide_index=True)
+    st.caption(
+        "`efficiency at n=2` — what a two-type generalist actually feeds at "
+        "(a/nᵖ); specialists always feed at 1.0.  ·  `total_breadth` includes "
+        "meat, and is the n the penalty divides by.  ·  `plant types` — which "
+        "plant food types are still represented at the end.")
+
+
+# ── Morphology in complex environments (random-environment sweep) ──────────
+def label_rand(env):
+    m = RAND_ENV_RE.match(env)
+    if not m:
+        return {}
+    return {"scale": int(m.group(2)), "scarcity": int(m.group(3)),
+            "replicate": int(m.group(4) or 1),
+            "arm": "predation" if m.group(5) else "normal"}
+
+
+# Measured landscape covariates recorded in each map's _meta by the generator.
+X_AXES = {
+    "Mean distance to food (measured)": ("mean_dist_to_food", "cells to the nearest emitter"),
+    "Food supply (emitters)":           ("emitters",          "emitters on the map"),
+    "Patch scale (Perlin resolution)":  ("scale",             "resolution — larger = coarser patches"),
+    "Food islands":                     ("islands",           "connected food ribbons"),
+    "Open regions":                     ("open_regions",      "walkable pockets the ribbons cut the map into"),
+}
+Y_METRICS = {
+    "Body size (cells / organism)":   "av_cells",
+    "Body composition entropy (bits)": "cell_entropy",
+    "Cell-type richness":             "cell_richness",
+    "Brain connections":              "connections",
+    "Brain hidden nodes":             "hidden_nodes",
+    "Species alive":                  "species_count",
+    "Movers (% of body)":             "mover_pct",
+    "Eyes (% of body)":               "eye_pct",
+    "Killers (% of body)":            "killer_pct",
+    "Final population":               "final_pop",
+}
+
+
+def render_morphology(envs):
+    rand_envs = sorted(e for e in envs if RAND_ENV_RE.match(e))
+    if not rand_envs:
+        st.warning(
+            "No random-environment results found. Expected "
+            "`results/rand_<size>_r<res>_e<emitters>_n<rep>[_predation]/seed_*.json` "
+            "— build the maps with `node scripts/generate_random_maps.js` and run "
+            "`scripts/submit_random_sweep.sh`.")
+        return
+
+    st.subheader(f"Morphology in complex environments — {len(rand_envs)} landscape(s)")
+    st.caption(
+        "Perlin-contour landscapes crossing **patch scale** (how far apart food "
+        "ribbons sit) with **food scarcity** (how many emitters exist), asking "
+        "whether a harder environment builds a more complex organism. Complexity "
+        "is read as body **size**, body **composition entropy** (a body of four "
+        "mouths is simpler than mouth+mover+eye+killer at the same cell count) "
+        "and **brain** size. The x-axis defaults to the *measured* mean distance "
+        "to food recorded in each map's `_meta`, not the nominal setting.")
+
+    meta   = map_meta("random_sweep")
+    labels = {e: label_rand(e) for e in rand_envs}
+    arms   = sorted({labels[e]["arm"] for e in rand_envs})
+    reps   = sorted({labels[e]["replicate"] for e in rand_envs})
+
+    c1, c2, c3, c4 = st.columns([2, 2, 1.4, 2])
+    y_label = c1.selectbox("Complexity metric", list(Y_METRICS), index=0)
+    x_label = c2.selectbox("Environment axis", list(X_AXES), index=0)
+    pick_arms = c3.multiselect("Arms", arms, default=arms)
+    pick_reps = c3.multiselect("Noise field", reps, default=reps)
+    ring_envs = [e for e in envs if e.startswith("map_500_d")]
+    baseline_env = c4.selectbox(
+        "Baseline (ring map)", ["— none —"] + ring_envs,
+        index=(ring_envs.index("map_500_d05") + 1) if "map_500_d05" in ring_envs else 0,
+        help="Draws the same metric from a distance-sweep environment as a "
+             "reference line — the ordered landscape the random maps are "
+             "being compared against.")
+    if not pick_arms or not pick_reps:
+        st.info("Select at least one arm and one noise field.")
+        return
+
+    use = [e for e in rand_envs
+           if labels[e]["arm"] in pick_arms and labels[e]["replicate"] in pick_reps]
+    df = collect_seed_stats(envs, use, label_rand)
+    if df.empty:
+        st.info("No readable seed results in the random-sweep folders yet.")
+        return
+    # Join the measured landscape covariates.
+    for key in ("mean_dist_to_food", "islands", "open_regions"):
+        df[key] = df["env"].map(lambda e: (meta.get(e) or {}).get(key))
+    df["emitters"] = (df["env"].map(lambda e: (meta.get(e) or {}).get("emitters_total"))
+                                .fillna(df["scarcity"]))
+
+    ykey = Y_METRICS[y_label]
+    xkey, xhelp = X_AXES[x_label]
+    METRICS = sorted(set(list(Y_METRICS.values()) + ["cell_entropy", "av_cells"]
+                         + [f"{t}_pct" for t in CELL_TYPES]
+                         + ["specialist_pct", "plant_breadth", "final_species"]))
+    agg = aggregate_seeds(df, ["arm", "scale", "scarcity", xkey], METRICS)
+
+    baseline = None
+    if baseline_env != "— none —":
+        bdf = collect_seed_stats(envs, [baseline_env], lambda e: {})
+        if not bdf.empty:
+            alive = bdf[~bdf["extinct"]]
+            src = alive if not alive.empty else bdf
+            baseline = {k: src[k].mean() for k in METRICS if k in src.columns}
+
+    m = st.columns(4)
+    m[0].metric("Landscapes with results", df["env"].nunique())
+    m[1].metric("Seeds read", len(df))
+    m[2].metric("Extinct seeds", f"{int(df['extinct'].sum())}/{len(df)}")
+    if baseline and pd.notna(baseline.get(ykey)) and baseline.get(ykey):
+        best = agg[ykey].max()
+        m[3].metric(f"Best vs {baseline_env}",
+                    f"{(best / baseline[ykey] - 1) * 100:+.0f}%" if pd.notna(best) else "—",
+                    help=f"Best landscape's mean {y_label.lower()} against the "
+                         f"ring-map baseline.")
+
+    # A — the headline: complexity against a measured property of the landscape
+    scarcities = sorted(agg["scarcity"].dropna().unique())
+    figA = go.Figure()
+    for si, sc in enumerate(scarcities):
+        colour = SCARCITY_RAMP[min(si, len(SCARCITY_RAMP) - 1)]
+        for arm in pick_arms:
+            sub = (agg[(agg["scarcity"] == sc) & (agg["arm"] == arm)]
+                   .dropna(subset=[xkey]).sort_values(xkey))
+            _band_series(figA, sub[xkey], sub[ykey], sub.get(f"{ykey}_sd", pd.Series(dtype=float)),
+                         f"{int(sc)} emitters · {arm}", colour, ARM_DASH[arm])
+    if baseline and pd.notna(baseline.get(ykey)):
+        figA.add_hline(y=baseline[ykey], line=dict(color="#666666", dash="dot"),
+                       annotation_text=f"{baseline_env} baseline",
+                       annotation_position="top left")
+    figA.update_layout(xaxis_title=f"{x_label} — {xhelp}", yaxis_title=y_label)
+    st.plotly_chart(styled(figA, f"{y_label} vs {x_label.lower()}"),
+                    use_container_width=True)
+
+    c1, c2 = st.columns(2)
+
+    # B — the 3x3 factorial as a matrix, averaged over arms/replicates
+    grid = (df[~df["extinct"]].groupby(["scale", "scarcity"], as_index=False)[ykey].mean()
+            if not df[~df["extinct"]].empty else pd.DataFrame())
+    if not grid.empty:
+        piv = grid.pivot(index="scale", columns="scarcity", values=ykey).sort_index()
+        figB = px.imshow(piv, text_auto=".2f", color_continuous_scale="Cividis",
+                         aspect="auto",
+                         labels=dict(x="Emitters (food supply)",
+                                     y="Perlin resolution (patch scale)", color=y_label))
+        figB.update_xaxes(type="category")
+        figB.update_yaxes(type="category")
+        c1.plotly_chart(styled(figB, f"{y_label} across the scale × scarcity grid"),
+                        use_container_width=True)
+
+    # C — brain against body: is a harder landscape moving organisms along the
+    #     size axis, the brain axis, or both?
+    pts = agg.dropna(subset=["av_cells", "connections"])
+    if not pts.empty:
+        figC = go.Figure()
+        for si, sc in enumerate(scarcities):
+            colour = SCARCITY_RAMP[min(si, len(SCARCITY_RAMP) - 1)]
+            for arm in pick_arms:
+                sub = pts[(pts["scarcity"] == sc) & (pts["arm"] == arm)]
+                if sub.empty:
+                    continue
+                figC.add_trace(go.Scatter(
+                    x=sub["av_cells"], y=sub["connections"], mode="markers",
+                    name=f"{int(sc)} emitters · {arm}",
+                    marker=dict(size=13, color=colour, line=dict(width=1.6, color="white"),
+                                symbol="circle" if arm == "normal" else "diamond"),
+                    customdata=np.stack([sub["scale"], sub["scarcity"]], -1),
+                    hovertemplate="res %{customdata[0]} · %{customdata[1]} emitters"
+                                  "<br>cells %{x:.2f}<br>connections %{y:.1f}<extra></extra>"))
+        if baseline and pd.notna(baseline.get("av_cells")) and pd.notna(baseline.get("connections")):
+            figC.add_trace(go.Scatter(
+                x=[baseline["av_cells"]], y=[baseline["connections"]], mode="markers+text",
+                name=baseline_env, text=[baseline_env], textposition="top center",
+                marker=dict(size=15, color="#666666", symbol="x")))
+        figC.update_layout(xaxis_title="Body size (cells / organism)",
+                           yaxis_title="Brain connections", hovermode="closest")
+        c2.plotly_chart(styled(figC, "Brain against body — which axis does the landscape move?"),
+                        use_container_width=True)
+
+    # D — composition, not just size
+    share_cols = [f"{t}_pct" for t in CELL_TYPES if f"{t}_pct" in agg.columns]
+    if share_cols:
+        comp = (df[~df["extinct"]]
+                .groupby(["scale", "scarcity"], as_index=False)[share_cols].mean())
+        if not comp.empty:
+            comp["cell"] = (comp["scale"].astype(int).astype(str) + " · "
+                            + comp["scarcity"].astype(int).astype(str))
+            figD = go.Figure()
+            for t in CELL_TYPES:
+                col = f"{t}_pct"
+                if col not in comp:
+                    continue
+                figD.add_trace(go.Bar(x=comp["cell"], y=comp[col], name=t,
+                                      marker_color=CELL_COLOURS[t]))
+            figD.update_layout(barmode="stack", yaxis_title="% of the average body",
+                               xaxis_title="patch scale · emitters")
+            st.plotly_chart(
+                styled(figD, "Body composition — a bigger body is not the same as a "
+                             "more complex one"),
+                use_container_width=True)
+
+    # Table — mirrors scripts/analyze_random_sweep.py
+    st.markdown("**Per-landscape summary** (survival over all seeds, everything "
+                "else over surviving seeds)")
+    tbl = aggregate_seeds(
+        df, ["scale", "scarcity", "replicate", "arm"],
+        ["mean_dist_to_food", "islands", "open_regions", "final_pop", "av_cells",
+         "cell_richness", "cell_entropy", "connections", "hidden_nodes",
+         "species_count", "mover_pct", "eye_pct", "killer_pct", "specialist_pct"])
+    tbl["extinct"] = (tbl["extinct_n"].astype(int).astype(str) + "/"
+                      + tbl["seeds"].astype(str))
+    # Each map seeds one founder species per food type, so which types are still
+    # represented says whether a whole island's lineage was lost.
+    types = (df.groupby(["scale", "scarcity", "replicate", "arm"])["plant_types"]
+               .apply(lambda s: "".join(str(t) for t in sorted(set().union(*s))) or "—")
+               .rename("types").reset_index())
+    tbl = tbl.merge(types, on=["scale", "scarcity", "replicate", "arm"], how="left")
+    cols = ["scale", "scarcity", "replicate", "arm", "seeds", "extinct",
+            "mean_dist_to_food", "islands", "open_regions", "final_pop", "av_cells",
+            "cell_richness", "cell_entropy", "connections", "hidden_nodes",
+            "species_count", "mover_pct", "eye_pct", "killer_pct", "specialist_pct",
+            "types"]
+    st.dataframe(
+        tbl[[c for c in cols if c in tbl.columns]]
+           .sort_values(["arm", "scale", "scarcity", "replicate"])
+           .style.format({
+               "mean_dist_to_food": "{:.1f}", "final_pop": "{:,.0f}",
+               "av_cells": "{:.2f}", "cell_richness": "{:.1f}",
+               "cell_entropy": "{:.2f}", "connections": "{:.1f}",
+               "hidden_nodes": "{:.1f}", "species_count": "{:.1f}",
+               "mover_pct": "{:.1f}", "eye_pct": "{:.1f}", "killer_pct": "{:.1f}",
+               "specialist_pct": "{:.1f}"}, na_rep="—"),
+        use_container_width=True, hide_index=True)
+    st.caption(
+        "`mean_dist_to_food`, `islands` and `open_regions` are measured off the "
+        "map by the generator and read from `maps/random_sweep/<env>.json` "
+        "`_meta` — they are properties of the landscape, not of the run. "
+        "`cell_entropy` is the Shannon entropy of the body's cell-type mix in bits.")
+
+
 # ── App shell ──────────────────────────────────────────────────────────────
 st.title("🧬 Life Engine Explorer")
 st.caption("Interactive viewer for headless simulation results. "
@@ -1302,7 +2056,8 @@ with st.sidebar:
     mode = st.radio(
         "View",
         ["Single seed", "Environment (mean ± SD)", "Overlay runs",
-         "Compare envs", "Meat sweep", "Summary (all runs)"],
+         "Compare envs", "Diet-penalty sweep", "Morphology (complex envs)",
+         "Meat sweep", "Summary (all runs)"],
         index=0)
     st.divider()
     st.caption(
@@ -1319,6 +2074,10 @@ elif mode == "Environment (mean ± SD)":
     render_environment(envs)
 elif mode == "Compare envs":
     render_compare_envs(envs)
+elif mode == "Diet-penalty sweep":
+    render_diet_sweep(envs)
+elif mode == "Morphology (complex envs)":
+    render_morphology(envs)
 elif mode == "Meat sweep":
     render_meat_sweep(envs)
 elif mode == "Overlay runs":
