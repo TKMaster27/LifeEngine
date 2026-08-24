@@ -45,6 +45,7 @@
 : "${DATA_RATE:=1000}"
 : "${KEEP_MIN:=50}"
 : "${LOG_EVERY:=100000}"
+: "${WORLD_SEEDS:=all}"        # all | none | "1 2" — which seeds write a world snapshot
 : "${MODE:=parallel}"             # parallel | sequential
 : "${SUMMARY_EMAIL:=mcktar010@myuct.ac.za}"   # detailed end-of-job summary recipient
 
@@ -69,6 +70,7 @@ echo "Seeds:         $SEEDS"
 echo "Max ticks:     $MAX_TICKS"
 echo "Data rate:     $DATA_RATE"
 echo "Keep-min:      $KEEP_MIN"
+echo "World seeds:   $WORLD_SEEDS"
 echo "Mode:          $MODE"
 echo ""
 
@@ -108,6 +110,20 @@ run_seed() {
     fi
 
     echo "[seed $SEED] start → $OUT (log: $SEED_LOG)"
+    # World snapshots are ~23 MB each and are only needed to reopen a run in the
+    # browser — the analysis never reads them. On a 20-seed sweep they dominate
+    # the disk bill, so WORLD_SEEDS limits which seeds write one.
+    #   WORLD_SEEDS=all   every seed (default, previous behaviour)
+    #   WORLD_SEEDS=none  no snapshots
+    #   WORLD_SEEDS="1 2" only these seeds
+    local SAVE_WORLD_ARGS=()
+    case " $WORLD_SEEDS " in
+        *" all "*)  SAVE_WORLD_ARGS=(--save-world "$WORLD") ;;
+        *" none "*) SAVE_WORLD_ARGS=() ;;
+        *" $SEED "*) SAVE_WORLD_ARGS=(--save-world "$WORLD") ;;
+        *) SAVE_WORLD_ARGS=() ;;
+    esac
+
     "$NODE_BIN" src/headless.js \
         --max-ticks "$MAX_TICKS" \
         --load      "$CONFIG" \
@@ -115,7 +131,7 @@ run_seed() {
         --data-rate "$DATA_RATE" \
         --keep-min  "$KEEP_MIN" \
         --output    "$OUT" \
-        --save-world "$WORLD" \
+        "${SAVE_WORLD_ARGS[@]}" \
         --log-every "$LOG_EVERY" \
         > "$SEED_LOG" 2>&1
     local EC=$?

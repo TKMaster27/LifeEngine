@@ -42,6 +42,7 @@ Memory / performance notes (matters for full 10M-tick records, ~145 MB each):
 
 import os
 import re
+import sys
 import json
 import math
 from collections import defaultdict
@@ -51,12 +52,21 @@ import pandas as pd
 import streamlit as st
 import plotly.express as px
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
 try:
     import ijson
     HAVE_IJSON = True
 except Exception:
     HAVE_IJSON = False
+
+# Sibling modules. `streamlit run` puts the script's own directory on sys.path,
+# but a plain `import dashboard` from elsewhere does not, so be explicit.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+try:
+    import complexity as CX          # statistics; needs scipy
+except Exception:
+    CX = None
 
 st.set_page_config(
     page_title="Life Engine Explorer",
@@ -1303,6 +1313,17 @@ def render_meat_sweep(envs):
 
 MEAT_TYPE = 0
 TAIL_FRAC = 0.10          # "settled value" = mean over the last 10% of samples
+PLANT_TYPES = (1, 2, 3)   # food types an organism can specialise on (0 is meat)
+# Mean plant-diet breadth at or above which a run is called generalist rather
+# than being labelled by whichever type happens to lead.
+GENERALIST_BREADTH = 1.5
+# Bump whenever _reduce_seed's OUTPUT SHAPE changes. st.cache_data keys its
+# persisted cache on the decorated function's ARGUMENT VALUES, so editing
+# _reduce_seed -- or merely referencing a constant inside sweep_seed_stats --
+# does NOT invalidate anything: the dashboard silently keeps serving old dicts
+# that are missing the new keys, which looks like a data bug, not a cache bug.
+# It only works because it is folded into the `sig` argument at the call site.
+REDUCER_VERSION = 4
 
 # Arms: CVD-validated pair (protan/deutan/tritan dE >= 21), same as the scripts.
 ARM_COLOR = {"normal": "#0072B2", "predation": "#D55E00"}
@@ -1374,6 +1395,8 @@ def _reduce_seed(summary, win, species):
     plant_breadth = total_breadth = specialists = meat_pop = 0.0
     breadth_pop = defaultdict(float)
     plant_types = set()
+    type_pop = defaultdict(float)
+    niche_pop = defaultdict(float)
     for s in live:
         pop    = s["population"]
         diets  = set(s.get("mouth_diets") or [])
@@ -1384,6 +1407,14 @@ def _reduce_seed(summary, win, species):
         meat_pop      += pop if MEAT_TYPE in diets else 0
         breadth_pop[len(plants)] += pop
         plant_types |= plants
+        # A generalist contributes to every type it eats, split evenly, so the
+        # shares sum to 100% of the population rather than double-counting it.
+        for t in plants:
+            type_pop[t] += pop / len(plants)
+        # A species' diet SET is its niche. Grouping by the set is what
+        # separates "one generalist eating two types" from "two specialist
+        # lineages", which the per-type shares below cannot do.
+        niche_pop[frozenset(plants)] += pop
 
     ext_tick = summary.get("extinction_tick")
     out = {
@@ -1415,8 +1446,54 @@ def _reduce_seed(summary, win, species):
     }
     for t in CELL_TYPES:
         out[f"{t}_pct"] = 100 * shares.get(t, 0.0)
+    # Feeding on n food types REQUIRES at least n mouths, so a diet-breadth
+    # effect on body size is partly definitional. Splitting the body lets the
+    # page show whether anything beyond the extra mouths actually changed.
+    av = out["av_cells"]
+    out["mouth_cells"]    = (av * shares.get("mouth", 0.0)) if av is not None else None
+    out["nonmouth_cells"] = (av * (1 - shares.get("mouth", 0.0))) if av is not None else None
     for n in range(4):
         out[f"breadth{n}_pct"] = (100 * breadth_pop.get(n, 0.0) / total) if total else None
+
+    # Which plant food type "won"?  Deliberately NOT final_diet_stats' answer:
+    # that reads population_diet_counts, which buckets ANY 2+-type diet as
+    # generalist, so a plant specialist that also scavenges meat is mislabelled.
+    # This shares the live-species basis with av_cells above, which is what lets
+    # body size and diet outcome be plotted against each other honestly.
+    for t in PLANT_TYPES:
+        out[f"diet{t}_pct"] = (100 * type_pop.get(t, 0.0) / total) if total else None
+    # Community-level radiation: Shannon H over the three plant-type population
+    # shares, in bits (0 = the whole population eats one type, log2(3)=1.585 =
+    # an even three-way split). This is the adaptive-radiation measure, and it
+    # is NOT plant_breadth: breadth asks whether a single organism generalises,
+    # H asks whether the community has partitioned the resource base. Nearly
+    # every surviving organism here is a specialist (breadth sits at 1.0), so
+    # breadth barely varies while H spans its full range.
+    shares = [(type_pop.get(t, 0.0) / total) if total else 0.0 for t in PLANT_TYPES]
+    out["diet_shannon"] = (-sum(p * math.log2(p) for p in shares if p > 0)
+                           if total else None)
+    out["diet_types_held"] = sum(1 for p in shares if p >= 0.05) if total else None
+
+    # NICHE diversity — the actual adaptive-radiation measure, and NOT the same
+    # as diet_shannon above. Three specialist lineages and one generalist that
+    # eats all three types give IDENTICAL per-type shares, so diet_shannon
+    # cannot tell radiation from generalism (it correlates ~0.8 with
+    # plant_breadth, i.e. it largely restates per-organism diet breadth).
+    # Shannon over populations grouped by their diet SET does separate them:
+    # one generalist species -> 0 bits, three specialist lineages -> log2(3).
+    nshares = [v / total for v in niche_pop.values()] if total else []
+    out["niche_shannon"] = (-sum(p * math.log2(p) for p in nshares if p > 0)
+                            if total else None)
+    out["niche_count"] = sum(1 for p in nshares if p >= 0.05) if total else None
+
+    if not total:
+        out["dominant_diet"] = DIET_LABELS["none"]
+    elif (plant_breadth / total) >= GENERALIST_BREADTH:
+        out["dominant_diet"] = DIET_LABELS["generalist"]
+    else:
+        top = max(PLANT_TYPES, key=lambda t: type_pop.get(t, 0.0))
+        out["dominant_diet"] = (DIET_LABELS[f"type{top}_only"] if type_pop.get(top)
+                                else DIET_LABELS["none"])
     return out
 
 
@@ -1535,7 +1612,7 @@ def collect_seed_stats(envs, names, label_fn):
     rows = []
     prog = st.progress(0.0, text="Reading seed results…")
     for i, (env, p) in enumerate(files, 1):
-        s = sweep_seed_stats(p, _file_sig(p))
+        s = sweep_seed_stats(p, (_file_sig(p), REDUCER_VERSION))
         if s:
             rows.append({"env": env, "file": os.path.basename(p), "path": p,
                          **label_fn(env), **s})
@@ -2025,6 +2102,435 @@ def render_morphology(envs):
         "`cell_entropy` is the Shannon entropy of the body's cell-type mix in bits.")
 
 
+# ── Environment complexity vs organism complexity ──────────────────────────
+@st.cache_data(show_spinner=False, persist="disk")
+def landscape_metrics_table(sig=None):
+    """Measured landscape descriptors for EVERY map, ring and random.
+
+    The random maps carry these in their `_meta`, but the ring maps carry no
+    `_meta` at all, so they have nothing to plot against and the simple-vs-
+    complex comparison has no shared x-axis. `scripts/landscape_metrics.py`
+    measures both families off `grid.emitters` with the same code (verified
+    against the generator's own numbers), which is what puts them on one axis.
+    """
+    # `sig` is the CSV's (mtime, size): without it a re-measured fleet would sit
+    # behind a permanently warm cache.
+    csv_path = os.path.join(REPO_ROOT, "analysis", "landscape_metrics.csv")
+    try:
+        if os.path.isfile(csv_path):
+            return pd.read_csv(csv_path)
+        import landscape_metrics as LM
+        return pd.DataFrame([LM.measure_map(p) for p in LM.all_maps()])
+    except Exception:
+        return pd.DataFrame()
+
+
+def _fmt_rho(r, ci=None):
+    if not r or not np.isfinite(r.get("rho", np.nan)):
+        return "ρ — (too few points)"
+    s = f"ρ = {r['rho']:+.2f},  p = {r['p']:.3f},  n = {r['n']}"
+    if ci and np.isfinite(ci[0]):
+        s += f"<br>95% CI [{ci[0]:+.2f}, {ci[1]:+.2f}]"
+    return s
+
+
+def render_complexity(envs):
+    if CX is None:
+        st.error("`scripts/complexity.py` could not be imported — the statistics "
+                 "on this page need it (and `scipy`; try `uv add scipy`).")
+        return
+
+    st.subheader("Environment complexity ↔ organism complexity")
+    st.caption(
+        "The Morphology page asks how big a body the landscape builds. The "
+        "Compare-envs page asks which diet won. This page puts them on **one "
+        "pair of axes** and tests the relationship — does a harder, more "
+        "dispersed resource landscape produce organisms that are bigger, more "
+        "compositionally complex, and more dietarily radiated?")
+
+    use = sorted(e for e in envs if RAND_ENV_RE.match(e) or e.startswith(CX.RING_PREFIX))
+    if not use:
+        st.warning("No random-environment or ring results found under `results/`.")
+        return
+
+    df = collect_seed_stats(envs, use, label_rand)
+    if df.empty:
+        st.info("No readable seed results.")
+        return
+    lm_csv = os.path.join(REPO_ROOT, "analysis", "landscape_metrics.csv")
+    df = CX.attach_landscape(
+        df, landscape_metrics_table(_file_sig(lm_csv) if os.path.isfile(lm_csv) else None))
+
+    # Drop conditions that vary the FITNESS RULES rather than the landscape.
+    n_all = len(df)
+    df = df[df["comparable_baseline"].fillna(True)].copy()
+    dropped = n_all - len(df)
+    if df.empty:
+        st.warning("Every environment found varies the diet penalty or meat "
+                   "nutrition rather than the landscape — nothing comparable to "
+                   "analyse.")
+        return
+
+    # ── the sample this page actually rests on ────────────────────────────
+    rand = df[df["env_class"] == "complex_random"]
+    ring = df[df["env_class"] == "simple_ring"]
+    surv = CX.survivors(df)
+    m = st.columns(4)
+    m[0].metric("Seeds read", len(df))
+    m[1].metric("Surviving seeds", len(surv),
+                help="Extinct runs have no standing population to measure, so "
+                     "they are excluded from every metric here — the same "
+                     "convention the Morphology page uses.")
+    m[2].metric("Landscapes with survivors",
+                CX.survivors(rand)["landscape_id"].nunique()
+                + CX.survivors(ring)["landscape_id"].nunique())
+    m[3].metric("Extinct", f"{int(df['extinct'].sum())}/{len(df)}")
+    if dropped:
+        st.caption(
+            f"Excluded {dropped} seed(s) from the diet-penalty and meat sweeps: "
+            f"those folders reuse one map and vary the *fitness rules*, so "
+            f"pooling them here would answer a different question. Only "
+            f"conditions at the baseline settings (diet-penalty exponent 1.0, "
+            f"meat nutrition 1.0) are kept.")
+
+    st.info(
+        f"**Unit of analysis.** Five seeds share a condition, and the "
+        f"`normal`/`predation` arms share the *same map*, so every correlation "
+        f"below is computed on **landscape means**, not on seeds — "
+        f"{CX.survivors(rand)['landscape_id'].nunique()} random landscapes, not "
+        f"{len(CX.survivors(rand))} seeds. Treating seeds as independent would "
+        f"inflate significance by roughly an order of magnitude. At this n, "
+        f"|ρ| ≳ 0.53 is needed for p < .05 before any multiplicity correction, "
+        f"so read these as *consistent with*, not *shows*. Results are also "
+        f"**conditional on survival**: harsh landscapes are represented only by "
+        f"their luckiest seeds, which biases slopes toward zero.")
+
+    if ring.empty:
+        st.warning(
+            "No **simple** (ring-map) results are present, so the "
+            "simple-vs-complex comparison your supervisor asked for cannot be "
+            "drawn yet — only the random-island family is analysed. Populate "
+            "`results/map_500_d01..d10/seed_*.json` and this page picks them up "
+            "with no further changes.")
+    elif ring["landscape_id"].nunique() < 3:
+        st.warning(
+            f"Only {ring['landscape_id'].nunique()} ring landscape(s) present, so "
+            "the simple family is a single point rather than a trend. Note also "
+            "that the ring maps seed all founders on ONE cluster with one diet, "
+            "while the random maps seed three islands with three diets — so a "
+            "ring-vs-random difference in *diet* is partly baked in at t=0.")
+
+    # ── controls ──────────────────────────────────────────────────────────
+    c1, c2, c3 = st.columns(3)
+    y_label = c1.selectbox("Organism metric (y)", list(CX.ORGANISM_METRICS.values()),
+                           index=0)
+    ykey = [k for k, v in CX.ORGANISM_METRICS.items() if v == y_label][0]
+    d_label = c2.selectbox("Diet outcome (x)", list(CX.DIET_OUTCOMES.values()), index=0)
+    dkey = [k for k, v in CX.DIET_OUTCOMES.items() if v == d_label][0]
+    avail_env = [k for k in CX.ENV_AXES if k in df.columns and df[k].notna().any()]
+    e_label = c3.selectbox("Environment axis",
+                           [CX.ENV_AXES[k] for k in avail_env], index=0)
+    ekey = [k for k in avail_env if CX.ENV_AXES[k] == e_label][0]
+    # Its own row: as a fourth column the label wraps to one character per line.
+    pool = st.checkbox(
+        "Pool the predation arms into one row per landscape", value=True,
+        help="On (strict): the predation sibling is the SAME map, so keeping "
+             "the arms apart would enter one landscape twice into a correlation "
+             "against its own measured properties. Off: one row per (landscape, "
+             "arm) — more points, but they are not independent.")
+
+    lm = CX.landscape_means(df, pool_arms=pool)
+    lm_rand = lm[lm["env_class"] == "complex_random"] if "env_class" in lm else lm
+
+    CLASS_COLOUR = {"complex_random": "#0072B2", "simple_ring": "#D55E00"}
+    CLASS_LABEL  = {"complex_random": "Complex (random islands)",
+                    "simple_ring": "Simple (3 clusters)"}
+
+    # ── 1. THE MERGE: body size against diet outcome ──────────────────────
+    st.divider()
+    st.markdown("### 1 · Body size against diet outcome")
+    st.caption(
+        "The Morphology page's y-variable against the Compare-envs page's "
+        "outcome, in one frame. Each point is a surviving seed; the fit and the "
+        "statistic use landscape means, per the note above.")
+
+    fig1 = go.Figure()
+    for cls, sub in CX.survivors(df).groupby("env_class"):
+        sub = sub.dropna(subset=[dkey, ykey])
+        if sub.empty:
+            continue
+        for arm, s2 in sub.groupby("arm"):
+            fig1.add_trace(go.Scatter(
+                x=s2[dkey], y=s2[ykey], mode="markers",
+                name=f"{CLASS_LABEL.get(cls, cls)} · {arm}",
+                marker=dict(size=11, color=CLASS_COLOUR.get(cls, "#888"),
+                            symbol="circle" if arm == "normal" else "diamond",
+                            opacity=0.75, line=dict(width=1.2, color="white")),
+                customdata=np.stack([s2["env"], s2["seed"]], -1),
+                hovertemplate="%{customdata[0]} seed %{customdata[1]}"
+                              f"<br>{d_label} %{{x:.2f}}<br>{y_label} %{{y:.2f}}"
+                              "<extra></extra>"))
+    fit = CX.theil_sen(lm[dkey], lm[ykey]) if dkey in lm and ykey in lm else None
+    if fit:
+        xs = np.linspace(np.nanmin(lm[dkey]), np.nanmax(lm[dkey]), 50)
+        fig1.add_trace(go.Scatter(
+            x=xs, y=fit["intercept"] + fit["slope"] * xs, mode="lines",
+            name="Theil–Sen fit", line=dict(color="#444444", width=2, dash="dash"),
+            hovertemplate=f"slope {fit['slope']:.3f}<extra></extra>"))
+    r  = CX.spearman(lm, dkey, ykey)
+    ci = CX.bootstrap_rho(lm, dkey, ykey, n_boot=1000)
+    _decomp = (ykey == "av_cells" and dkey in ("plant_breadth", "diet_shannon",
+                                               "diet_types_held"))
+    fig1.add_annotation(xref="paper", yref="paper", x=0.02, y=0.98,
+                        showarrow=False, align="left",
+                        text=_fmt_rho(r, ci), bgcolor="rgba(255,255,255,0.88)",
+                        font=dict(color="#111111", size=12),
+                        bordercolor="#999", borderwidth=1, borderpad=6)
+    fig1.update_layout(xaxis_title=d_label, yaxis_title=y_label)
+    # styled() re-applies LAYOUT_DEFAULTS, which pins the legend above the plot —
+    # fine for two series, but this one has four and would cover the title.
+    st.plotly_chart(
+        styled(fig1, f"{y_label} vs {d_label.lower()}").update_layout(
+            hovermode="closest", height=540,
+            legend=dict(orientation="h", yanchor="top", y=-0.16, x=0,
+                        font=dict(size=10))),
+        use_container_width=True)
+
+    if _decomp:
+        # Eating n food types REQUIRES at least n mouths, so part of any
+        # breadth->size relationship is definitional. Split the body and say
+        # which half actually moved.
+        rm = CX.spearman(lm, dkey, "mouth_cells")
+        rn = CX.spearman(lm, dkey, "nonmouth_cells")
+        re_ = CX.spearman(lm, dkey, "cell_entropy")
+        st.warning(
+            f"**Is this just extra mouths?** Feeding on *n* food types requires "
+            f"at least *n* mouth cells, so part of this relationship is "
+            f"definitional rather than morphological. Splitting the body: "
+            f"**mouth cells ρ = {rm['rho']:+.2f} (p = {rm['p']:.3f})**, "
+            f"**everything else ρ = {rn['rho']:+.2f} (p = {rn['p']:.3f})**, "
+            f"body composition entropy ρ = {re_['rho']:+.2f} "
+            f"(p = {re_['p']:.3f}), n = {rm['n']}. If only the mouth term is "
+            f"significant, the bigger body is the extra mouths — the rest of "
+            f"the organism did not reorganise, and a negative entropy term means "
+            f"the body became *more* mouth-dominated, not more complex.")
+
+    # ── 2. body size by which diet won ────────────────────────────────────
+    st.markdown("### 2 · Body size by the diet that won")
+    st.caption(
+        "The Compare-envs dominant-diet question, but asking what BODY each "
+        "outcome built. `dominant_diet` here is derived from the live-species "
+        "diets — the same basis as body size — rather than from "
+        "`population_diet_counts`, which buckets any 2+-type diet as generalist "
+        "and so mislabels a plant specialist that also scavenges meat.")
+
+    sv = CX.survivors(df).dropna(subset=[ykey, "dominant_diet"])
+    if sv.empty:
+        st.info("No surviving seeds with a diet outcome.")
+    else:
+        kw = CX.group_test(sv, ykey, "dominant_diet")
+        fig2 = px.violin(sv, x="dominant_diet", y=ykey, color="dominant_diet",
+                         box=True, points="all", hover_data=["env", "seed"],
+                         color_discrete_map=DIET_COLOURS,
+                         category_orders={"dominant_diet": DIET_ORDER},
+                         labels={"dominant_diet": "Diet that ended up dominant",
+                                 ykey: y_label})
+        fig2.update_layout(showlegend=False)
+        st.plotly_chart(styled(fig2, f"{y_label} by dominant diet"),
+                        use_container_width=True)
+        sizes = ", ".join(f"{k} n={v}" for k, v in (kw.get("sizes") or {}).items())
+        if kw.get("ok"):
+            st.markdown(
+                f"**Kruskal–Wallis** H = {kw['H']:.2f}, p = {kw['p']:.4f}, "
+                f"ε² = {kw['eps2']:.3f} over n = {kw['n']} surviving seeds in "
+                f"{kw['groups']} groups ({sizes})."
+                + ("  Groups differ." if kw["p"] < 0.05 else
+                   "  No detectable difference."))
+            if kw.get("dropped"):
+                st.caption(f"Excluded, fewer than {kw['min_n']} seeds: {kw['dropped']}")
+            st.caption(
+                "Seed-level, unlike the correlations: the grouping here is the "
+                "run's own *outcome*, not a property of the landscape, so seeds "
+                "are the natural unit — but seeds from one landscape still share "
+                "a map, so treat ε² as indicative.")
+        else:
+            st.info(f"Not tested — {kw.get('reason')} ({sizes}).")
+
+    # ── 3. the chain: landscape → radiation → body ────────────────────────
+    st.markdown("### 3 · Landscape → radiation → body")
+    st.caption(
+        "One shared x-axis, measured off the map. Row A asks whether the "
+        "landscape drives radiation, rows B and C whether it moves the body. "
+        "Ring maps are plotted as points on the *same* axis rather than as a "
+        "baseline line, so both families can be read as one trend.")
+
+    if ekey not in lm.columns or lm[ekey].notna().sum() < 3:
+        st.info("Not enough measured landscape values for this axis.")
+    else:
+        # Metrics on wildly different scales (species count vs bits, brain
+        # connections vs entropy) get the secondary axis, otherwise the smaller
+        # one is a flat line at the bottom of the panel and reads as "no effect".
+        LBL3 = {**CX.DIET_OUTCOMES, **CX.ORGANISM_METRICS}
+        rows_spec = [
+            ("A · radiation",
+             [k for k in ("diet_shannon", "plant_breadth") if k in lm.columns],
+             [k for k in ("species_count",) if k in lm.columns]),
+            ("B · body size", ["av_cells"], []),
+            ("C · complexity",
+             [k for k in ("cell_entropy",) if k in lm.columns],
+             [k for k in ("connections",) if k in lm.columns]),
+        ]
+        fig3 = make_subplots(rows=3, cols=1, shared_xaxes=True,
+                             vertical_spacing=0.07,
+                             specs=[[{"secondary_y": True}]] * 3,
+                             subplot_titles=[t for t, _, _ in rows_spec])
+        palette = ["#0072B2", "#D55E00", "#009E73", "#CC79A7"]
+        ci = 0
+        for ri, (_, left, right) in enumerate(rows_spec, 1):
+            for keys, sec in ((left, False), (right, True)):
+                for k in keys:
+                    colour = palette[ci % len(palette)]
+                    ci += 1
+                    for cls, sub in lm.groupby("env_class"):
+                        sub = sub.dropna(subset=[ekey, k]).sort_values(ekey)
+                        if sub.empty:
+                            continue
+                        is_ring = cls == "simple_ring"
+                        # Markers, not lines: with 14 noisy landscapes a
+                        # connecting line draws a sawtooth that reads as
+                        # structure the correlations below say isn't there.
+                        fig3.add_trace(go.Scatter(
+                            x=sub[ekey], y=sub[k], mode="markers",
+                            name=f"{LBL3.get(k, k)} · {CLASS_LABEL.get(cls, cls)}"
+                                 + (" (right)" if sec else ""),
+                            marker=dict(size=14 if is_ring else 9, color=colour,
+                                        symbol="x" if is_ring else "circle",
+                                        line=dict(width=1, color="white")),
+                            customdata=sub[["landscape_id"]].to_numpy(),
+                            hovertemplate="%{customdata[0]}<br>"
+                                          f"{LBL3.get(k, k)} %{{y:.2f}}"
+                                          f"<br>{e_label} %{{x:.1f}}<extra></extra>"),
+                            row=ri, col=1, secondary_y=sec)
+            for keys, sec in ((left, False), (right, True)):
+                if keys:
+                    fig3.update_yaxes(
+                        title_text=" / ".join(LBL3.get(k, k).split(" (")[0]
+                                              for k in keys),
+                        row=ri, col=1, secondary_y=sec,
+                        title_font=dict(size=11), showgrid=not sec)
+        fig3.update_xaxes(title_text=e_label, row=3, col=1)
+        st.plotly_chart(
+            styled(fig3, "Does the landscape move radiation, the body, or neither?")
+            .update_layout(height=880, hovermode="closest",
+                           legend=dict(orientation="v", yanchor="top", y=1, x=1.12,
+                                       font=dict(size=9))),
+            use_container_width=True)
+
+    # ── 4. correlation matrix + mediation ─────────────────────────────────
+    st.markdown("### 4 · What actually correlates")
+    xcols = [c for c in list(CX.ENV_AXES) + list(CX.DIET_OUTCOMES)
+             if c in lm_rand.columns and lm_rand[c].notna().any()]
+    ycols = [c for c in CX.ORGANISM_METRICS if c in lm_rand.columns]
+    mat = CX.spearman_matrix(lm_rand, ycols, xcols)
+    if mat["rho"].notna().any():
+        piv = mat.pivot(index="y", columns="x", values="rho")
+        piv = piv.reindex(index=[c for c in ycols if c in piv.index],
+                          columns=[c for c in xcols if c in piv.columns])
+        # A metric that never varies (hidden_nodes is constant here) yields an
+        # all-NaN row; drawn, it reads as "measured, no relationship" rather
+        # than "not measurable".
+        piv = piv.dropna(axis=0, how="all").dropna(axis=1, how="all")
+        LBL = {**CX.ENV_AXES, **CX.DIET_OUTCOMES, **CX.ORGANISM_METRICS}
+        # Full labels carry their units, which is right in a selectbox and far
+        # too long on a tick.
+        short = lambda c: LBL.get(c, c).split(" (")[0]
+        fig4 = px.imshow(piv, zmin=-1, zmax=1, color_continuous_scale="RdBu",
+                         text_auto=".2f", aspect="auto",
+                         labels=dict(color="Spearman ρ", x="", y=""),
+                         x=[short(c) for c in piv.columns],
+                         y=[short(c) for c in piv.index])
+        for _, row in mat[mat["significant"]].iterrows():
+            if row["y"] in piv.index and row["x"] in piv.columns:
+                fig4.add_annotation(x=short(row["x"]), y=short(row["y"]),
+                                    text="★", showarrow=False, yshift=16,
+                                    font=dict(size=16, color="#000000"))
+        fig4.update_xaxes(tickangle=-40, tickfont=dict(size=10))
+        fig4.update_yaxes(tickfont=dict(size=10))
+        st.plotly_chart(
+            styled(fig4, "Spearman ρ — random landscapes only")
+            .update_layout(height=460, margin=dict(l=10, r=10, t=50, b=120)),
+            use_container_width=True)
+        n_here = int(mat["n"].max()) if mat["n"].notna().any() else 0
+        st.caption(
+            f"★ survives Benjamini–Hochberg FDR at q < 0.05 across all "
+            f"{len(mat)} tests. Computed on {n_here} landscape"
+            f"{'s' if n_here != 1 else ''} (random family only — the ring family "
+            f"has too few landscapes to correlate). BH rather than Bonferroni "
+            f"because these tests are positively correlated and the question is "
+            f"which relationships are worth following up.")
+        with st.expander("Full correlation table"):
+            show = mat.copy()
+            show["x"] = show["x"].map(lambda c: LBL.get(c, c))
+            show["y"] = show["y"].map(lambda c: LBL.get(c, c))
+            st.dataframe(show.sort_values("p").style.format(
+                {"rho": "{:+.3f}", "p": "{:.4f}", "q": "{:.4f}"}, na_rep="—"),
+                use_container_width=True, hide_index=True)
+
+    # mediation
+    med = CX.partial_spearman(lm_rand, ekey, ykey, dkey)
+    if np.isfinite(med.get("rho", np.nan)) and np.isfinite(med.get("partial", np.nan)):
+        drop = (1 - abs(med["partial"]) / abs(med["rho"])) * 100 if med["rho"] else np.nan
+        st.markdown(
+            f"**Is the environment's effect on {y_label.lower()} routed through "
+            f"{d_label.lower()}?**  Raw ρ({e_label.lower()}, {y_label.lower()}) = "
+            f"**{med['rho']:+.2f}** (p = {med.get('p_rho', float('nan')):.3f}); "
+            f"controlling for {d_label.lower()} it becomes **{med['partial']:+.2f}** "
+            f"(p = {med.get('p_partial', float('nan')):.3f}), n = {med['n']}"
+            + (f" — {drop:.0f}% attenuated." if np.isfinite(drop) else "."))
+        st.caption(
+            "**Exploratory.** At this n a partial correlation cannot separate "
+            "mediation from confounding, and endpoint correlations carry no "
+            "temporal order. Establishing that the landscape acts on morphology "
+            "*through* diet needs the within-run series (the Overlay page's "
+            "specialisation traces), not this.")
+
+    # ── organism index + table + export ───────────────────────────────────
+    st.divider()
+    scores, info = CX.organism_index(CX.survivors(df))
+    if info:
+        with st.expander(f"Organism Complexity Index — PC1, {info['explained']*100:.0f}% "
+                         f"of variance (n = {info['n']})"):
+            st.write(info["loadings"])
+            st.caption(
+                "PC1 of the z-scored organism metrics. Read the loadings before "
+                "using it: if body size and composition entropy load with "
+                "opposite signs, this axis is a size-versus-diversity *contrast*, "
+                "not an overall 'complexity' score, and the component metrics "
+                "above are the honest thing to report.")
+
+    st.markdown("**Per-landscape summary** (surviving seeds only)")
+    # dict.fromkeys dedupes while preserving order: the selected axes are often
+    # already in the fixed list, and a repeated column raises in st.dataframe.
+    tbl_cols = list(dict.fromkeys(
+        ["landscape_id"] + ([] if pool else ["arm"])
+        + ["env_class", "n_seeds", ekey, dkey, "av_cells", "cell_entropy",
+           "cell_richness", "connections", "species_count", "diet_shannon"]))
+    st.dataframe(
+        lm[[c for c in tbl_cols if c in lm.columns]].sort_values(
+            ekey if ekey in lm.columns else "landscape_id")
+        .style.format({c: "{:.2f}" for c in tbl_cols
+                       if c not in ("landscape_id", "arm", "env_class", "n_seeds")},
+                      na_rep="—"),
+        use_container_width=True, hide_index=True)
+
+    st.download_button(
+        "⬇︎ Per-seed table (CSV)", df.to_csv(index=False).encode(),
+        file_name="complexity_table.csv", mime="text/csv",
+        help="One row per (env, seed): organism metrics, diet outcome and "
+             "measured landscape descriptors. This reduction otherwise only "
+             "exists inside Streamlit's cache and cannot reach the paper.")
+
+
 # ── App shell ──────────────────────────────────────────────────────────────
 st.title("🧬 Life Engine Explorer")
 st.caption("Interactive viewer for headless simulation results. "
@@ -2057,7 +2563,7 @@ with st.sidebar:
         "View",
         ["Single seed", "Environment (mean ± SD)", "Overlay runs",
          "Compare envs", "Diet-penalty sweep", "Morphology (complex envs)",
-         "Meat sweep", "Summary (all runs)"],
+         "Complexity (env ↔ organism)", "Meat sweep", "Summary (all runs)"],
         index=0)
     st.divider()
     st.caption(
@@ -2078,6 +2584,8 @@ elif mode == "Diet-penalty sweep":
     render_diet_sweep(envs)
 elif mode == "Morphology (complex envs)":
     render_morphology(envs)
+elif mode == "Complexity (env ↔ organism)":
+    render_complexity(envs)
 elif mode == "Meat sweep":
     render_meat_sweep(envs)
 elif mode == "Overlay runs":
