@@ -1332,6 +1332,28 @@ ARM_DASH  = {"normal": "solid",   "predation": "dash"}
 SCARCITY_RAMP = ["#9dc3e6", "#3d7ebf", "#12436d"]
 PENALTY_RAMP  = ["#c6dbef", "#9ecae1", "#6baed6", "#3182bd", "#08519c"]
 
+
+def ramp_colour(ramp, i, n):
+    """Colour i of n sampled along `ramp`, interpolating between its stops.
+
+    Indexing a ramp directly and clamping (`ramp[min(i, len - 1)]`) was fine
+    while a sweep had exactly as many levels as the ramp has stops, but the
+    random fleet grew from three emitter levels {168, 336, 672} to five
+    {168, 336, 448, 672, 896}: everything past the third landed on the last
+    stop and was drawn in the SAME colour, so three distinct series read as
+    one. Interpolating keeps every level separable however many levels the
+    results folder happens to hold."""
+    if n <= 1:
+        return ramp[-1]
+    pos = (i / (n - 1)) * (len(ramp) - 1)
+    lo  = max(0, min(int(math.floor(pos)), len(ramp) - 1))
+    hi  = min(lo + 1, len(ramp) - 1)
+    f   = pos - lo
+    a = [int(ramp[lo].lstrip("#")[k:k + 2], 16) for k in (0, 2, 4)]
+    b = [int(ramp[hi].lstrip("#")[k:k + 2], 16) for k in (0, 2, 4)]
+    return "#%02x%02x%02x" % tuple(int(round(x + (y - x) * f)) for x, y in zip(a, b))
+
+
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # Env naming conventions, straight from the generators.
@@ -1584,24 +1606,62 @@ def diet_timeseries(path, sig=None):
         return None
 
 
+MAPS_DIR = os.path.join(REPO_ROOT, "maps")
+
+
+def _maps_sig():
+    """(relpath, mtime, size) for every map file under maps/ — folded into
+    map_meta's cache key so a regenerated or newly generated fleet is picked up
+    without restarting the app."""
+    out = []
+    for root, dirs, files in os.walk(MAPS_DIR):
+        dirs[:] = sorted(d for d in dirs if not d.startswith("."))
+        for fn in sorted(files):
+            if fn.endswith(".json"):
+                fp = os.path.join(root, fn)
+                out.append((os.path.relpath(fp, MAPS_DIR), *_file_sig(fp)))
+    return tuple(out)
+
+
 @st.cache_data(show_spinner=False)
-def map_meta(subdir):
-    """{map stem: _meta} for every map in maps/<subdir>. The generators record
-    MEASURED landscape properties there (mean distance to food, island count,
-    open regions), which make far better x-axes than the nominal settings."""
-    out = {}
-    d = os.path.join(REPO_ROOT, "maps", subdir)
-    if not os.path.isdir(d):
-        return out
-    for fn in sorted(os.listdir(d)):
-        if not fn.endswith(".json"):
-            continue
-        try:
-            with open(os.path.join(d, fn)) as f:
-                out[fn[:-5]] = (json.load(f) or {}).get("_meta", {}) or {}
-        except Exception:
-            continue
-    return out
+def map_meta(sig=None):
+    """-> ({map stem: _meta}, [conflicting stems]) for EVERY map under maps/.
+
+    The generators record MEASURED landscape properties there (mean distance to
+    food, island count, open regions), which make far better x-axes than the
+    nominal settings.
+
+    Walking the whole tree instead of one named subdirectory is the point: a new
+    sweep arrives as a new DIRECTORY (maps/random_sweep -> maps/random_near for
+    the 20-seed fleet), so a hardcoded subdir drops the newest results *without
+    saying so* — the env still has seeds, but no measured covariate to plot them
+    against, and every chart keyed on one silently skips those rows.
+
+    The fleets overlap by name; where they do, the map files are byte-identical,
+    so first-found wins. A stem whose two copies genuinely disagree is reported
+    rather than silently resolved: that would mean results/<env>/ pools seeds
+    from two different maps, which no chart on this page could untangle."""
+    meta, src, conflicts = {}, {}, []
+    for root, dirs, files in os.walk(MAPS_DIR):
+        dirs[:] = sorted(d for d in dirs if not d.startswith("."))
+        for fn in sorted(files):
+            if not fn.endswith(".json"):
+                continue
+            stem, fp = fn[:-5], os.path.join(root, fn)
+            try:
+                with open(fp) as f:
+                    m = (json.load(f) or {}).get("_meta", {}) or {}
+            except Exception:
+                continue
+            rel = os.path.relpath(fp, REPO_ROOT)
+            if stem in meta:
+                if not meta[stem]:            # prefer a copy that actually has _meta
+                    meta[stem], src[stem] = m, rel
+                elif m and m != meta[stem]:
+                    conflicts.append((stem, src[stem], rel))
+                continue
+            meta[stem], src[stem] = m, rel
+    return meta, conflicts
 
 
 def collect_seed_stats(envs, names, label_fn):
@@ -1906,7 +1966,9 @@ def render_morphology(envs):
             "No random-environment results found. Expected "
             "`results/rand_<size>_r<res>_e<emitters>_n<rep>[_predation]/seed_*.json` "
             "— build the maps with `node scripts/generate_random_maps.js` and run "
-            "`scripts/submit_random_sweep.sh`.")
+            "`scripts/submit_sweep20.sh` (20 seeds, `maps/random_near/`) or the "
+            "older `scripts/submit_random_sweep.sh` (5 seeds, `maps/random_sweep/`). "
+            "Maps from **any** folder under `maps/` are picked up.")
         return
 
     st.subheader(f"Morphology in complex environments — {len(rand_envs)} landscape(s)")
@@ -1919,7 +1981,7 @@ def render_morphology(envs):
         "and **brain** size. The x-axis defaults to the *measured* mean distance "
         "to food recorded in each map's `_meta`, not the nominal setting.")
 
-    meta   = map_meta("random_sweep")
+    meta, meta_conflicts = map_meta(_maps_sig())
     labels = {e: label_rand(e) for e in rand_envs}
     arms   = sorted({labels[e]["arm"] for e in rand_envs})
     reps   = sorted({labels[e]["replicate"] for e in rand_envs})
@@ -1929,13 +1991,21 @@ def render_morphology(envs):
     x_label = c2.selectbox("Environment axis", list(X_AXES), index=0)
     pick_arms = c3.multiselect("Arms", arms, default=arms)
     pick_reps = c3.multiselect("Noise field", reps, default=reps)
-    ring_envs = [e for e in envs if e.startswith("map_500_d")]
+    # Ring maps only, and only the ones run at the BASELINE fitness rules. The
+    # `_dietp` / `_meat` folders sit on the same d05 map but change what feeding
+    # is worth, so a reference line drawn from one would attribute a rules effect
+    # to the landscape. (They are named `map_500_d05_dietp150`, so a plain
+    # startswith would have offered them.)
+    ring_envs = [e for e in envs if e.startswith("map_500_d")
+                 and not DIET_ENV_RE.search(e) and not MEAT_ENV_RE.search(e)]
     baseline_env = c4.selectbox(
         "Baseline (ring map)", ["— none —"] + ring_envs,
         index=(ring_envs.index("map_500_d05") + 1) if "map_500_d05" in ring_envs else 0,
         help="Draws the same metric from a distance-sweep environment as a "
              "reference line — the ordered landscape the random maps are "
-             "being compared against.")
+             "being compared against. Only ring environments run at the "
+             "baseline fitness rules are offered; the diet-penalty and "
+             "meat-nutrition folders reuse the d05 map but change the rules.")
     if not pick_arms or not pick_reps:
         st.info("Select at least one arm and one noise field.")
         return
@@ -1952,6 +2022,27 @@ def render_morphology(envs):
     df["emitters"] = (df["env"].map(lambda e: (meta.get(e) or {}).get("emitters_total"))
                                 .fillna(df["scarcity"]))
 
+    # Every chart below drops rows whose x is NaN, so a landscape with results
+    # but no map file just vanishes. Say it out loud — silently dropping the
+    # NEWEST conditions is exactly the failure this page had.
+    nometa = sorted(set(df.loc[df["mean_dist_to_food"].isna(), "env"]))
+    if nometa:
+        shown = ", ".join(f"`{e}`" for e in nometa[:6])
+        st.warning(
+            f"{len(nometa)} condition(s) have seed results but no matching map "
+            f"under `maps/`, so they carry no measured covariates and are absent "
+            f"from the distance / islands / open-regions axes: {shown}"
+            + (" …" if len(nometa) > 6 else "")
+            + ". Copy or regenerate the map JSON (any subfolder of `maps/` works) "
+              "to bring them back.")
+    if meta_conflicts:
+        st.error(
+            "Two different maps share one name: "
+            + "; ".join(f"`{s}` ({a} vs {b})" for s, a, b in meta_conflicts[:4])
+            + ". `results/<env>/` is keyed on that name, so its seeds may come "
+              "from both maps and the landscape covariates below are whichever "
+              "copy was read first.")
+
     ykey = Y_METRICS[y_label]
     xkey, xhelp = X_AXES[x_label]
     METRICS = sorted(set(list(Y_METRICS.values()) + ["cell_entropy", "av_cells"]
@@ -1967,8 +2058,13 @@ def render_morphology(envs):
             src = alive if not alive.empty else bdf
             baseline = {k: src[k].mean() for k in METRICS if k in src.columns}
 
+    n_cond = df["env"].nunique()
+    n_land = df["env"].str.replace("_predation", "", regex=False).nunique()
     m = st.columns(4)
-    m[0].metric("Landscapes with results", df["env"].nunique())
+    m[0].metric("Landscapes with results", n_land,
+                help=f"{n_cond} condition folder(s): the predation arm reuses the "
+                     f"same map as its normal sibling, so conditions outnumber "
+                     f"landscapes wherever both arms ran.")
     m[1].metric("Seeds read", len(df))
     m[2].metric("Extinct seeds", f"{int(df['extinct'].sum())}/{len(df)}")
     if baseline and pd.notna(baseline.get(ykey)) and baseline.get(ykey):
@@ -1978,11 +2074,24 @@ def render_morphology(envs):
                     help=f"Best landscape's mean {y_label.lower()} against the "
                          f"ring-map baseline.")
 
+    # Conditions are no longer equal-n: the 20-seed fleet (maps/random_near) and
+    # the original 5-seed sweep (maps/random_sweep) share this page, and a
+    # part-finished condition lands in between. Every mean here is unweighted, so
+    # that is worth stating rather than leaving to be inferred from the table.
+    per_cond = df.groupby("env")["seed"].count()
+    if per_cond.nunique() > 1:
+        st.caption(
+            f"Seed counts differ across conditions ({int(per_cond.min())}–"
+            f"{int(per_cond.max())} per folder, {len(df)} seeds over {n_cond} "
+            f"conditions) — the 20-seed fleet, the original 5-seed sweep and any "
+            f"part-finished condition all appear here. Means are unweighted: a "
+            f"5-seed landscape counts as much as a 20-seed one.")
+
     # A — the headline: complexity against a measured property of the landscape
     scarcities = sorted(agg["scarcity"].dropna().unique())
     figA = go.Figure()
     for si, sc in enumerate(scarcities):
-        colour = SCARCITY_RAMP[min(si, len(SCARCITY_RAMP) - 1)]
+        colour = ramp_colour(SCARCITY_RAMP, si, len(scarcities))
         for arm in pick_arms:
             sub = (agg[(agg["scarcity"] == sc) & (agg["arm"] == arm)]
                    .dropna(subset=[xkey]).sort_values(xkey))
@@ -1998,7 +2107,10 @@ def render_morphology(envs):
 
     c1, c2 = st.columns(2)
 
-    # B — the 3x3 factorial as a matrix, averaged over arms/replicates
+    # B — the scale x scarcity factorial as a matrix, averaged over arms and
+    #     replicates. The fleet is ragged (the two sweeps cover different
+    #     emitter levels), so cells with no results stay blank rather than
+    #     being filled in.
     grid = (df[~df["extinct"]].groupby(["scale", "scarcity"], as_index=False)[ykey].mean()
             if not df[~df["extinct"]].empty else pd.DataFrame())
     if not grid.empty:
@@ -2018,7 +2130,7 @@ def render_morphology(envs):
     if not pts.empty:
         figC = go.Figure()
         for si, sc in enumerate(scarcities):
-            colour = SCARCITY_RAMP[min(si, len(SCARCITY_RAMP) - 1)]
+            colour = ramp_colour(SCARCITY_RAMP, si, len(scarcities))
             for arm in pick_arms:
                 sub = pts[(pts["scarcity"] == sc) & (pts["arm"] == arm)]
                 if sub.empty:
@@ -2066,11 +2178,23 @@ def render_morphology(envs):
     # Table — mirrors scripts/analyze_random_sweep.py
     st.markdown("**Per-landscape summary** (survival over all seeds, everything "
                 "else over surviving seeds)")
+    tkeys = ["scale", "scarcity", "replicate", "arm"]
     tbl = aggregate_seeds(
-        df, ["scale", "scarcity", "replicate", "arm"],
-        ["mean_dist_to_food", "islands", "open_regions", "final_pop", "av_cells",
-         "cell_richness", "cell_entropy", "connections", "hidden_nodes",
-         "species_count", "mover_pct", "eye_pct", "killer_pct", "specialist_pct"])
+        df, tkeys,
+        ["final_pop", "av_cells", "cell_richness", "cell_entropy", "connections",
+         "hidden_nodes", "species_count", "mover_pct", "eye_pct", "killer_pct",
+         "specialist_pct"])
+    # The landscape descriptors describe the MAP and are known whether or not
+    # anything survived on it, so they are taken straight off the condition
+    # rather than through aggregate_seeds — which averages over SURVIVING seeds
+    # and therefore blanked them out on exactly the wiped-out landscapes where
+    # "the nearest food was 141 cells away" is the explanation. This also puts
+    # the table back in agreement with scripts/analyze_random_sweep.py, which
+    # reads them from the map's `_meta` regardless of outcome.
+    tbl = tbl.merge(
+        df.groupby(tkeys, as_index=False, dropna=False)
+          [["mean_dist_to_food", "islands", "open_regions"]].first(),
+        on=tkeys, how="left")
     tbl["extinct"] = (tbl["extinct_n"].astype(int).astype(str) + "/"
                       + tbl["seeds"].astype(str))
     # Each map seeds one founder species per food type, so which types are still
@@ -2097,8 +2221,11 @@ def render_morphology(envs):
         use_container_width=True, hide_index=True)
     st.caption(
         "`mean_dist_to_food`, `islands` and `open_regions` are measured off the "
-        "map by the generator and read from `maps/random_sweep/<env>.json` "
-        "`_meta` — they are properties of the landscape, not of the run. "
+        "map by the generator and read from the `_meta` of `<env>.json` in "
+        "whichever `maps/` folder holds it (`random_near` for the 20-seed fleet, "
+        "`random_sweep` for the original) — they are properties of the "
+        "landscape, not of the run — so they are shown even for a condition "
+        "where every seed died, which is where they explain the most. "
         "`cell_entropy` is the Shannon entropy of the body's cell-type mix in bits.")
 
 

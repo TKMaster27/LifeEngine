@@ -41,8 +41,26 @@ from collections import defaultdict
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-SWEEP_DIR = REPO_ROOT / "maps" / "random_sweep"
-RESULTS   = REPO_ROOT / "results"
+MAPS_DIR  = REPO_ROOT / "maps"
+# Every fleet of random landscapes, newest first. A sweep arrives as a new
+# DIRECTORY (random_sweep -> random_near for the 20-seed sweep), and this script
+# walks MAPS rather than results, so a hardcoded single directory does not just
+# lose the covariates for the new landscapes -- it never reports them at all.
+# Names overlap between fleets; the shared files are byte-identical, and
+# `collect_maps` keeps the first copy so a landscape is reported once.
+SWEEP_DIRS = (MAPS_DIR / "random_near", MAPS_DIR / "random_sweep")
+RESULTS    = REPO_ROOT / "results"
+
+
+def collect_maps(dirs=SWEEP_DIRS) -> list[Path]:
+    """-> one map file per landscape name, across every fleet directory."""
+    out, seen = [], set()
+    for d in dirs:
+        for p in sorted(d.glob("rand_*.json")):
+            if p.stem not in seen:
+                seen.add(p.stem)
+                out.append(p)
+    return out
 
 MEAT_TYPE = 0
 NAME_RE = re.compile(r"^rand_(\d+)_r(\d+)_e(\d+)(?:_n(\d+))?(_predation)?$")
@@ -52,6 +70,21 @@ ARM_COLOR = {"normal": "#0072B2", "predation": "#D55E00"}
 ARM_MARK  = {"normal": "o-", "predation": "s--"}
 # Scarcity levels get a light->dark single-hue ramp (sequential = magnitude).
 SCARCITY_RAMP = ["#9dc3e6", "#3d7ebf", "#12436d"]
+
+
+def ramp_colour(ramp, i, n):
+    """Colour i of n along `ramp`, interpolated. Clamping at the last stop --
+    which is what indexing the list did -- drew every emitter level past the
+    third in the SAME colour once the fleet grew from three levels to five."""
+    if n <= 1:
+        return ramp[-1]
+    pos = (i / (n - 1)) * (len(ramp) - 1)
+    lo  = max(0, min(int(pos), len(ramp) - 1))
+    hi  = min(lo + 1, len(ramp) - 1)
+    f   = pos - lo
+    a = [int(ramp[lo].lstrip("#")[k:k + 2], 16) for k in (0, 2, 4)]
+    b = [int(ramp[hi].lstrip("#")[k:k + 2], 16) for k in (0, 2, 4)]
+    return "#%02x%02x%02x" % tuple(int(round(x + (y - x) * f)) for x, y in zip(a, b))
 
 
 def tail_mean(series, frac=0.1):
@@ -204,10 +237,11 @@ def main() -> None:
                          "the ring-map environment the random maps are being compared against")
     args = ap.parse_args()
 
-    maps = list(SWEEP_DIR.glob("rand_*.json"))
+    maps = collect_maps()
     if not maps:
-        raise SystemExit("No maps/random_sweep/*.json — run "
-                         "`node scripts/generate_random_maps.js` first.")
+        raise SystemExit("No rand_*.json in " +
+                         " or ".join(str(d.relative_to(REPO_ROOT)) for d in SWEEP_DIRS) +
+                         " — run `node scripts/generate_random_maps.js` first.")
 
     rows = collect(maps, label_random)
     done = [r for r in rows if r["seeds"]]
@@ -270,7 +304,7 @@ def main() -> None:
         fig, axes = plt.subplots(2, 2, figsize=(11, 7.5), sharex=True)
         for ax, (key, title) in zip(axes.flat, panels):
             for si, sc in enumerate(scarcities):
-                color = SCARCITY_RAMP[min(si, len(SCARCITY_RAMP) - 1)]
+                color = ramp_colour(SCARCITY_RAMP, si, len(scarcities))
                 for arm in ("normal", "predation"):
                     pts = [(r["mean_dist_to_food"], r.get(key)) for r in done
                            if r["scarcity"] == sc and r["arm"] == arm and r.get(key) is not None

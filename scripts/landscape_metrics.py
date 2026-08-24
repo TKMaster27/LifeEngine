@@ -254,10 +254,31 @@ def verify(folder: Path, tol: float = 0.011) -> int:
 
 
 def all_maps() -> list[Path]:
-    out = list(MAPS_DIR.glob("*.json"))
-    for sub in MAP_SUBDIRS[1:]:
-        out += list((MAPS_DIR / sub).glob("*.json"))
-    return sorted(p for p in out if p.name != "preview.png")
+    """Every map, ONE row per name.
+
+    The sweep fleets overlap: maps/random_near (the 20-seed sweep) regenerated
+    several landscapes that maps/random_sweep already held, byte for byte. Both
+    copies run under the SAME results/<env>/ folder, so emitting both would put
+    two rows under one `map` key -- and `complexity.attach_landscape` left-joins
+    this table onto the seed table on exactly that key, which would silently
+    duplicate every seed of the twelve shared landscapes. De-duplicate here, in
+    MAP_SUBDIRS order, the same precedence `resolve_map` uses."""
+    out, seen = [], {}
+    for sub in MAP_SUBDIRS:
+        d = (MAPS_DIR / sub) if sub else MAPS_DIR
+        for p in sorted(d.glob("*.json")):
+            if p.stem in seen:
+                # Skipping the copy is only safe while the copies AGREE. If they
+                # ever diverge, results/<p.stem>/ pools seeds from two different
+                # landscapes and no downstream table can untangle it, so say so
+                # rather than let precedence decide silently.
+                if p.read_bytes() != seen[p.stem].read_bytes():
+                    print(f"WARNING: {p} differs from {seen[p.stem]} but shares "
+                          f"its name; measuring the latter", file=sys.stderr)
+                continue
+            seen[p.stem] = p
+            out.append(p)
+    return sorted(out)
 
 
 def main() -> int:

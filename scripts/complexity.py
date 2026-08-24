@@ -321,6 +321,12 @@ def attach_landscape(seed_df: pd.DataFrame, land_df: pd.DataFrame) -> pd.DataFra
     keep = [c for c in land.columns
             if c not in ("map_path", "size", "metrics_version", "map_sha1")]
     land = land[keep].rename(columns={"map": "env"})
+    # One row per env, defensively. The merge below is a LEFT join on `env`, so a
+    # table listing the same map twice -- which is what an older
+    # landscape_metrics.py produced once maps/random_near duplicated twelve of
+    # maps/random_sweep's landscapes -- would duplicate every seed of those envs
+    # and quietly inflate the n behind every statistic on the page.
+    land = land.drop_duplicates(subset="env", keep="first")
     # Landscape descriptors are properties of the MAP, so join on the map the
     # env was run from -- which for a predation arm is its own file.
     out = df.merge(land, on="env", how="left", suffixes=("", "_land"))
