@@ -1,0 +1,122 @@
+{
+  "_comment": "Canonical controls for the cluster-spacing (ring) maps. Extracted from the browser-saved maps/map_500_d05.json, which scripts/generate_random_maps.js also inherits from (its --controls-from default). Kept as a standalone file so generate_maps.py is not circular with a map it writes. Experiment1_Base.json predates the CTRNN/NEAT brain work and is NOT a valid base.",
+  "controls": {
+    "lifespanMultiplier": 500,
+    "foodProdProb": "0",
+    "emitterProdProb": 50,
+    "emitterNoiseThreshold": 0.3,
+    "emitterResolution": 50,
+    "emitterIslandSize": 0.1,
+    "killableNeighbors": [
+      [
+        0,
+        1
+      ],
+      [
+        0,
+        -1
+      ],
+      [
+        1,
+        0
+      ],
+      [
+        -1,
+        0
+      ]
+    ],
+    "edibleNeighbors": [
+      [
+        0,
+        1
+      ],
+      [
+        0,
+        -1
+      ],
+      [
+        1,
+        0
+      ],
+      [
+        -1,
+        0
+      ]
+    ],
+    "growableNeighbors": [
+      [
+        0,
+        1
+      ],
+      [
+        0,
+        -1
+      ],
+      [
+        1,
+        0
+      ],
+      [
+        -1,
+        0
+      ]
+    ],
+    "useGlobalMutability": false,
+    "globalMutability": 5,
+    "addProb": 5,
+    "changeProb": 5,
+    "removeProb": 5,
+    "brainMutationChance": 75,
+    "mutationSymmetryChance": 10,
+    "foodBlocksReproduction": true,
+    "moversCanProduce": false,
+    "instaKill": false,
+    "dontKillSameSpecies": true,
+    "lookRange": 300,
+    "seeThroughSelf": false,
+    "thrustDamping": 0.05,
+    "rotationalDamping": 0.3,
+    "nnMutationStrength": 0.1,
+    "nnHiddenSize": 6,
+    "neatAddConnectionProb": 5,
+    "neatAddNodeProb": 3,
+    "neatDisableConnectionProb": 2,
+    "cppnAddConnectionProb": 5,
+    "cppnAddNodeProb": 3,
+    "cppnMutateActivationProb": 4,
+    "cppnDisableConnectionProb": 1,
+    "cppnSeedPriorStrength": 1,
+    "ctrnnEnabled": true,
+    "ctrnnDt": 1,
+    "ctrnnDefaultTau": 3,
+    "ctrnnMinTau": 1,
+    "ctrnnMaxTau": 8,
+    "foodDropProb": 0.01,
+    "altFoodTypeChance": 1,
+    "foodTypes": [
+      {
+        "id": 0,
+        "nutrition": 1.0
+      },
+      {
+        "id": 1,
+        "nutrition": 1
+      },
+      {
+        "id": 2,
+        "nutrition": 1
+      },
+      {
+        "id": 3,
+        "nutrition": 1
+      }
+    ],
+    "extraMoverFoodCost": 0,
+    "deadTurnToFood": false,
+    "maxOrganisms": -1,
+    "rotationEnabled": true,
+    "dietPenaltyStrength": 1.0,
+    "dietPenaltyExponent": 1.0,
+    "dietMutationConservatism": 80
+  }
+}
