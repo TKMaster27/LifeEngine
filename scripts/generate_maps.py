@@ -10,26 +10,51 @@ For every distance level both a normal map and a `_predation` sibling
 (`controls.deadTurnToFood = true`) are written, so a single run produces the
 complete experiment set.
 
-Uses Experiment1_Base.json as a template so hyperparameters are inherited.
-No starting organism is placed.
+Controls are inherited from base_controls.json — the same 49-key control set
+scripts/generate_random_maps.js builds the random fleet from, so the two map
+families are hyperparameter-identical.
+
+Founders use the MATCHED protocol shared with scripts/generate_random_maps.js:
+two founders at each of the three clusters, one diet per cluster (types 1/2/3),
+each cluster its own species_name (`<base>_t<type>`), and one fossil_record
+species entry per lineage. This exists so the ring-vs-random geometry contrast
+is not confounded at t=0 — the previous ring maps seeded ONE lineage of six
+organisms on a single diet while the random maps seeded three lineages of two.
+Both families now start with six organisms, three lineages and all three diets,
+so a body-plan difference between them can be attributed to geometry.
+Use --no-founders for the old empty-`organisms` behaviour.
 
 Usage:
     uv run scripts/generate_maps.py                 # 10 distances (default)
     uv run scripts/generate_maps.py --distances 6   # 6 distances
     uv run scripts/generate_maps.py --no-predation  # skip predation siblings
+    uv run scripts/generate_maps.py --no-founders   # leave "organisms" empty
 """
 
 from __future__ import annotations
 import argparse
 import json
 import math
+import random
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-TEMPLATE  = REPO_ROOT / "Experiment1_Base.json"
+# Controls base. NOT Experiment1_Base.json — that file predates the CTRNN/NEAT
+# brain work and is missing ctrnnEnabled, nnHiddenSize and the 12 other brain
+# keys, so generating from it silently reverts every map to default brain
+# settings. base_controls.json holds the same 49 controls that
+# scripts/generate_random_maps.js inherits (its --controls-from default is the
+# browser-saved maps/map_500_d05.json), kept standalone so this script is not
+# circular with a map it writes.
+TEMPLATE  = REPO_ROOT / "base_controls.json"
+FOUNDER   = REPO_ROOT / "founder_species_1.json"
 OUT_DIR   = REPO_ROOT / "maps"
 
 SIZE = 500
+
+# Matched founder protocol (mirrors generate_random_maps.js defaults:
+# founders=6, founderIslands=3, founderDiet='island').
+FOUNDERS_PER_CLUSTER = 2
 
 # Cluster shape: solid hollow circle (a single-cell-thick emitter ring).
 #   - A cell is an emitter when its distance to the cluster centre rounds to
@@ -154,8 +179,132 @@ def empty_fossil_record() -> dict:
     }
 
 
+# ── founder placement ───────────────────────────────────────────────────────
+# Ported from scripts/generate_random_maps.js (placeFounders / speciesRecords).
+# The random generator seeds islands; here the three clusters play that role, so
+# "one lineage per island, diet = the island's food type" becomes "one lineage
+# per cluster, diet = the cluster's food type". Everything downstream — species
+# naming, mouth diets, fossil_record shape — is identical between the two.
+
+
+def organism_radius(template_org: dict) -> int:
+    """Half-width of the bounding box the organism occupies, in cells."""
+    return max(
+        (max(abs(cl["loc_col"]), abs(cl["loc_row"])) for cl in template_org["anatomy"]["cells"]),
+        default=0,
+    ) + 1
+
+
+def blocked_cells(emitters: list[dict], size: int) -> set[int]:
+    """Emitter cells plus a one-cell halo, flattened to r*size+c.
+
+    Mirrors the JS, which keeps founders clear of the food ribbons. Here the
+    ring is an impassable wall, so this also stops a founder being born
+    embedded in it."""
+    out: set[int] = set()
+    for e in emitters:
+        for dc in (-1, 0, 1):
+            for dr in (-1, 0, 1):
+                c, r = e["c"] + dc, e["r"] + dr
+                if 0 <= c < size and 0 <= r < size:
+                    out.add(r * size + c)
+    return out
+
+
+def find_spot(center: tuple[int, int], centers: list[tuple[int, int]], radius: int,
+              occupied: set[int], size: int, rad: int,
+              rng: random.Random) -> tuple[int, int] | None:
+    """A clear spot just OUTSIDE this cluster's ring wall.
+
+    Spirals outward from the ring's edge until a (2*rad+1)^2 box is free of
+    emitters, other founders and the map border. Candidates inside ANY cluster's
+    hollow are rejected: the ring is impassable, so a founder born in the
+    interior would be sealed in with its food and could never reach the others.
+    """
+    cx, cy = center
+    for ring in range(radius + rad + 2, radius + 120):
+        cand = []
+        for a in range(24):
+            th = (a / 24) * 2 * math.pi
+            cand.append((round(cx + ring * math.cos(th)),
+                         round(cy + ring * math.sin(th))))
+        rng.shuffle(cand)
+        for c, r in cand:
+            if c - rad < 1 or r - rad < 1 or c + rad >= size - 1 or r + rad >= size - 1:
+                continue
+            # never inside a hollow (including a neighbouring cluster's)
+            if any(math.hypot(c - ox, r - oy) < radius for ox, oy in centers):
+                continue
+            box = [(r + dr) * size + (c + dc)
+                   for dc in range(-rad, rad + 1) for dr in range(-rad, rad + 1)]
+            if any(k in occupied for k in box):
+                continue
+            occupied.update(box)
+            return c, r
+    return None
+
+
+def place_founders(template_org: dict, centers: list[tuple[int, int]],
+                   emitters: list[dict], radius: int, size: int,
+                   per_cluster: int, rng: random.Random) -> tuple[list[dict], list[dict]]:
+    """Two founders at each cluster, one diet per cluster, one species each."""
+    rad = organism_radius(template_org)
+    occupied = blocked_cells(emitters, size)
+    base_name = template_org["species_name"]
+
+    organisms: list[dict] = []
+    seeded: list[dict] = []
+    for center, ftype in zip(centers, FOOD_TYPES):
+        # One species per cluster so the fossil record tracks the lineages apart
+        # (organisms sharing a species_name share ONE Species object on load).
+        species_name = f"{base_name}_t{ftype}"
+        placed = 0
+        for _ in range(per_cluster):
+            spot = find_spot(center, centers, radius, occupied, size, rad, rng)
+            if spot is None:
+                break
+            org = json.loads(json.dumps(template_org))
+            org["c"], org["r"] = spot
+            org["species_name"] = species_name
+            for cl in org["anatomy"]["cells"]:
+                if (cl.get("state") or {}).get("name") == "mouth":
+                    cl["diet"] = ftype
+            organisms.append(org)
+            placed += 1
+        seeded.append({"cluster_center": list(center), "food_type": ftype,
+                       "species": species_name, "organisms": placed})
+    return organisms, seeded
+
+
+def species_records(organisms: list[dict]) -> dict:
+    """fossil_record.species entries for the placed founders.
+
+    `population` MUST match how many organisms share the species_name. Without
+    it the loader's fallback path builds a Species with population=1 however
+    many founders share the name, so the second founder's death drives the count
+    negative and the lineage is fossilised as extinct while it is still alive
+    ("Tried to fossilize non existing species")."""
+    out: dict = {}
+    for org in organisms:
+        name = org["species_name"]
+        if name not in out:
+            diets = sorted({
+                cl["diet"] for cl in org["anatomy"]["cells"]
+                if (cl.get("state") or {}).get("name") == "mouth"
+                and isinstance(cl.get("diet"), int)
+            })
+            out[name] = {
+                "population": 0, "cumulative_pop": 0, "start_tick": 0,
+                "end_tick": -1, "extinct": False, "mouth_diets": diets,
+            }
+        out[name]["population"] += 1
+        out[name]["cumulative_pop"] += 1
+    return out
+
+
 def build_map(size: int, distance_label: str, r_fraction: float,
-              template_controls: dict, *, predation: bool) -> dict:
+              template_controls: dict, founder_org: dict | None, *,
+              predation: bool) -> dict:
     radius = CLUSTER_RADIUS
     centers = cluster_centers(size, r_fraction)
     emitters = []
@@ -174,6 +323,17 @@ def build_map(size: int, distance_label: str, r_fraction: float,
         "emitters":  emitters,
     }
 
+    # Seeded on geometry only — NOT on `predation` — so an arm pair (map_500_dNN
+    # and map_500_dNN_predation) gets byte-identical founder placement and the
+    # two arms differ solely by controls.deadTurnToFood.
+    rng = random.Random(f"{size}:{distance_label}:{r_fraction}")
+    if founder_org is None:
+        organisms, seeded = [], []
+    else:
+        organisms, seeded = place_founders(
+            founder_org, centers, emitters, radius, size,
+            FOUNDERS_PER_CLUSTER, rng)
+
     controls = dict(template_controls)
     # Inter-species predation: killer cells never harm conspecifics, so the
     # corpse->meat loop is cross-species, not cannibalism (which would let a
@@ -182,6 +342,9 @@ def build_map(size: int, distance_label: str, r_fraction: float,
     controls["dontKillSameSpecies"] = True
     if predation:
         controls["deadTurnToFood"] = True
+
+    fossil = empty_fossil_record()
+    fossil["species"] = species_records(organisms)
 
     return {
         "_meta": {
@@ -200,6 +363,11 @@ def build_map(size: int, distance_label: str, r_fraction: float,
             "food_type_per_cluster": {f"cluster_{i}": t for i, t in enumerate(FOOD_TYPES)},
             "emitters_per_cluster":  per_cluster_counts,
             "emitters_total":        len(emitters),
+            "founder_file":          None if founder_org is None else FOUNDER.name,
+            "founder_protocol":      "matched-random-maps",
+            "founders_per_cluster":  0 if founder_org is None else FOUNDERS_PER_CLUSTER,
+            "founders_total":        len(organisms),
+            "founders_seeded":       seeded,
         },
         "num_rows":            size,
         "num_cols":            size,
@@ -209,8 +377,8 @@ def build_map(size: int, distance_label: str, r_fraction: float,
         "total_ticks":         0,
         "data_update_rate":    100,
         "grid":                grid,
-        "organisms":           [],
-        "fossil_record":       empty_fossil_record(),
+        "organisms":           organisms,
+        "fossil_record":       fossil,
         "controls":            controls,
     }
 
@@ -222,6 +390,10 @@ def parse_args() -> argparse.Namespace:
                    help=f"number of distance levels to generate (default {DEFAULT_NUM_DISTANCES})")
     p.add_argument("--no-predation", action="store_true",
                    help="skip the _predation siblings (write normal maps only)")
+    p.add_argument("--no-founders", action="store_true",
+                   help='leave "organisms" empty (pre-matched-protocol behaviour)')
+    p.add_argument("--founder-file", default=str(FOUNDER),
+                   help=f"founder template to seed from (default {FOUNDER.name})")
     return p.parse_args()
 
 
@@ -232,6 +404,11 @@ def main() -> None:
         template = json.load(f)
     template_controls = template["controls"]
 
+    founder_org = None
+    if not args.no_founders:
+        with open(args.founder_file) as f:
+            founder_org = json.load(f)
+
     OUT_DIR.mkdir(parents=True, exist_ok=True)
 
     variants = [False] if args.no_predation else [False, True]
@@ -239,12 +416,13 @@ def main() -> None:
 
     print(f"{'size':>5} {'distance':>8} {'R_frac':>7} {'vertex_dist':>11} "
           f"{'radius':>7} {'per_cluster':>14} {'total':>6} "
-          f"{'predation':>9}  file")
-    print("-" * 110)
+          f"{'predation':>9} {'founders':>8}  file")
+    print("-" * 120)
 
     for label, r_frac in levels:
         for predation in variants:
-            env = build_map(SIZE, label, r_frac, template_controls, predation=predation)
+            env = build_map(SIZE, label, r_frac, template_controls, founder_org,
+                            predation=predation)
             suffix = "_predation" if predation else ""
             path = OUT_DIR / f"map_{SIZE}_{label}{suffix}.json"
             with path.open("w") as f:
@@ -255,7 +433,8 @@ def main() -> None:
                   f"{env['_meta']['cluster_radius']:>7} "
                   f"{str(per_cluster):>14} "
                   f"{env['_meta']['emitters_total']:>6} "
-                  f"{str(predation):>9}  {path.relative_to(REPO_ROOT)}")
+                  f"{str(predation):>9} {env['_meta']['founders_total']:>8}  "
+                  f"{path.relative_to(REPO_ROOT)}")
 
 
 if __name__ == "__main__":

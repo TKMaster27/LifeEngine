@@ -1721,12 +1721,18 @@ def _band_series(fig, x, y, sd, name, color, dash="solid", showlegend=True):
     c = color.lstrip("#")
     rgba = f"rgba({int(c[0:2],16)},{int(c[2:4],16)},{int(c[4:6],16)},0.15)"
     if (sd > 0).any():
+        # mode="lines" is load-bearing, not decoration. Plotly's default mode for
+        # a scatter of <=20 points is "lines+markers", so an edge trace that only
+        # sets line.width=0 still draws MARKERS -- and since no marker colour is
+        # given, each one is assigned the next colour in the default colorway.
+        # The result was a scatter of bright, meaningless dots (the ribbon edges)
+        # sitting on top of every band chart on this page and the diet page.
         fig.add_traces([
-            go.Scatter(x=x, y=y + sd, line=dict(width=0), showlegend=False,
+            go.Scatter(x=x, y=y + sd, mode="lines", line=dict(width=0),
+                       showlegend=False, hoverinfo="skip", legendgroup=name),
+            go.Scatter(x=x, y=y - sd, mode="lines", line=dict(width=0),
+                       fill="tonexty", fillcolor=rgba, showlegend=False,
                        hoverinfo="skip", legendgroup=name),
-            go.Scatter(x=x, y=y - sd, line=dict(width=0), fill="tonexty",
-                       fillcolor=rgba, showlegend=False, hoverinfo="skip",
-                       legendgroup=name),
         ])
     fig.add_trace(go.Scatter(x=x, y=y, name=name, mode="lines+markers",
                              legendgroup=name, showlegend=showlegend,
